@@ -1,0 +1,29 @@
+name: setup
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          z=( *.zip )
+          if [ ${#z[@]} -gt 0 ]; then
+            rm -rf /tmp/jx && mkdir -p /tmp/jx
+            unzip -q "${z[0]}" -d /tmp/jx
+            f="$(find /tmp/jx -maxdepth 4 -name server.js | head -n 1)"
+            d="$(dirname "$f")"
+            shopt -s dotglob; cp -R "$d"/. .; shopt -u dotglob
+            rm -f "${z[0]}"
+          fi
+      - shell: bash
+        env: { DEV_PASSWORD: KHOHDEEG }
+        run: bash .github/scripts/setup.sh

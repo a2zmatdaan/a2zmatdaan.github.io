@@ -9,8 +9,8 @@ name: 0 · Auto Setup (zip → live site)
 #   permission नहीं थी → GitHub ने push reject कर दिया।
 #
 #  अब क्या ठीक किया:
-#   1) permissions में `workflows: write` जोड़ा
-#   2) commit में .github/workflows को छुआ ही नहीं जाता (आपका workflow सुरक्षित)
+#   1) commit में .github/workflows को छुआ ही नहीं जाता (आपका workflow सुरक्षित)
+#      → push कभी reject नहीं होगा (workflow फ़ाइल बदलने की समस्या ही खत्म)
 #   3) push fail हो तो भी साइट live हो जाती है (Pages artifact से deploy)
 #   4) push fail हो तो असली error summary में दिखता है + पूरा प्रोजेक्ट
 #      `janmat-project.zip` artifact के रूप में download के लिए तैयार रहता है
@@ -23,7 +23,6 @@ on:
 
 permissions:
   contents: write     # zip खोलकर commit करने के लिए
-  workflows: write    # ⬅️ यही missing था (workflow फ़ाइल बदलने की परमिशन)
   pages: write        # Pages deploy के लिए
   id-token: write
 
@@ -319,4 +318,3 @@ jobs:
             echo ""
             echo "उसके बाद **Actions → 0 · Auto Setup → Run workflow** एक बार फिर दबाएँ।"
           } >> "$GITHUB_STEP_SUMMARY"
-          

@@ -79,6 +79,8 @@
       <span>·</span>
       <a href="#/disclaimer">डिस्क्लेमर</a>
       <span>·</span>
+      <a href="#/grievance">शिकायत</a>
+      <span>·</span>
       <a href="#/how">गाइड</a>
       <span>·</span>
       <a href="#/explore">चुनाव खोजें</a>
@@ -1734,6 +1736,22 @@ main#app { flex: 1 0 auto; }
 .site-footer { margin-top: auto; }
 @media (min-width: 900px) { main#app { min-height: 58vh; } }
 
+/* ============ 📊 उपयोग मीटर (डेव पैनल) ============ */
+.meter {
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .14);
+  overflow: hidden;
+  width: 100%;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width .35s ease;
+}
+:root[data-theme="light"] .meter { background: rgba(0, 0, 0, .12); }
+
 
 /* preview / offline banner */
 .offline-bar {
@@ -2892,6 +2910,10 @@ function toast(msg, type) {
 /* ------------------------- copy helpers -------------------------- */
 
 function pageBase() { return location.href.split('#')[0].split('?')[0]; }
+/* शिकायत के लिए सार्वजनिक ईमेल — खाली हो तो सिर्फ़ फ़ॉर्म दिखेगा।
+   अपना ईमेल यहाँ लिख दो: GRIEVANCE_EMAIL = 'naam@example.com' */
+const GRIEVANCE_EMAIL = 'pawanverma992930@gmail.com';
+
 function shareUrl(code) { return pageBase() + '#/e/' + code; }
 
 async function copyText(text) {
@@ -4491,6 +4513,10 @@ function electionHTML(d) {
             <button class="btn btn-primary btn-sm" data-copy="${esc(link)}">कॉपी</button>
           </div>
           <p class="req-note">कोड <b>${esc(d.code)}</b> से भी लोग इसे “चुनाव खोजें” पेज पर ढूँढ सकते हैं।</p>
+          <p class="muted small" style="margin-top:12px">
+            इस चुनाव में कुछ गलत लगा?
+            <a class="link" href="#/grievance?e=${esc(d.code)}">शिकायत / रिपोर्ट करें</a>
+          </p>
         </div>
       </div>
 
@@ -5257,6 +5283,7 @@ async function renderDeveloper() {
         <button class="tab ${devTab === 'elections' ? 'active' : ''}" data-devt="elections">सभी चुनाव (${devData.elections.length})</button>
         <button class="tab ${devTab === 'votes' ? 'active' : ''}" data-devt="votes">सभी वोट (${devData.votes.length})</button>
         <button class="tab ${devTab === 'users' ? 'active' : ''}" data-devt="users">यूज़र्स (${devData.users.length})</button>
+        <button class="tab ${devTab === 'complaints' ? 'active' : ''}" data-devt="complaints">शिकायतें (${(devData.usage && devData.usage.openComplaints) || 0})</button>
         <button class="tab ${devTab === 'summary' ? 'active' : ''}" data-devt="summary">सारांश</button>
       </div>
 
@@ -5286,9 +5313,10 @@ async function renderDeveloper() {
   });
 
   $$('[data-devt]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       devTab = btn.dataset.devt;
       $$('[data-devt]').forEach((b) => b.classList.toggle('active', b === btn));
+      if (devTab === 'complaints') await loadDevComplaints();
       document.getElementById('devBody').innerHTML = devBodyHTML();
       bindDevBody();
     });
@@ -5296,6 +5324,132 @@ async function renderDeveloper() {
 
   bindDevBody();
   startDevLive();
+}
+
+
+/* =====================================================================
+   📊 उपयोग मीटर — Upstash 5,00,000 commands/महीना और 250 MB की असली स्थिति
+   (गिनती इस अपडेट के बाद से — हर सफल Redis command गिनी जाती है)
+   ===================================================================== */
+function bytesHuman(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(2) + ' MB';
+  return (b / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function meterBar(pct, danger) {
+  const p = Math.max(0, Math.min(100, pct));
+  const color = p >= 85 ? '#e5484d' : p >= 60 ? '#f0a020' : '#2fa84f';
+  return `<div class="meter"><i style="width:${p.toFixed(1)}%;background:${color}"></i></div>`;
+}
+
+function usageMeterHTML() {
+  const u = (devData && devData.usage) || null;
+  if (!u) return '';
+  const cmdPct = (u.commands / (u.commandQuota || 500000)) * 100;
+  const dbPct = (u.dbBytes / (u.dbBytesQuota || 1)) * 100;
+  const safe = cmdPct < 60;
+  return `
+  <div class="dev-card" style="margin-bottom:18px">
+    <div class="dev-card-head">
+      <h3>📊 उपयोग मीटर — ${esc(u.monthKey || '')}</h3>
+      <span class="storage-chip">${safe ? 'सुरक्षित' : 'ध्यान दें'}</span>
+    </div>
+    <div class="dev-grid2" style="gap:14px">
+      <div>
+        <div class="muted small" style="margin-bottom:6px">
+          <b>${fmt(u.commands)}</b> / ${fmt(u.commandQuota)} commands (${cmdPct.toFixed(2)}%)
+        </div>
+        ${meterBar(cmdPct)}
+        <div class="muted small" style="margin-top:8px">इस महीने: <b>${fmt(u.votesThisMonth)}</b> वोट · <b>${fmt(u.electionsThisMonth)}</b> चुनाव</div>
+      </div>
+      <div>
+        <div class="muted small" style="margin-bottom:6px">
+          <b>${bytesHuman(u.dbBytes)}</b> / ${bytesHuman(u.dbBytesQuota)} डेटा (${dbPct.toFixed(2)}%)
+        </div>
+        ${meterBar(dbPct)}
+        <div class="muted small" style="margin-top:8px">खुली शिकायतें: <b>${fmt(u.openComplaints || 0)}</b></div>
+      </div>
+    </div>
+    <p class="muted small" style="margin-top:12px">
+      सीमा: One+Upstash free = 5,00,000 commands/महीना · 250 MB डेटा. 60% से नीचे = बिल्कुल सुरक्षित.
+      गिनती इस अपडेट के बाद से शुरू हुई है (पुराने दिन नहीं जुड़े).
+    </p>
+  </div>`;
+}
+
+/* =====================================================================
+   📩 शिकायतें (grievance dashboard) — 24 घंटे में पुष्टि, 15 दिन में हल
+   ===================================================================== */
+let devComplaints = null;
+
+async function loadDevComplaints() {
+  try {
+    devComplaints = await api('/api/dev/complaints');
+  } catch (e) {
+    devComplaints = { complaints: [], stats: { total: 0, open: 0, resolved: 0, oldestOpenAt: null }, error: e.message };
+  }
+  return devComplaints;
+}
+
+function complaintKindLabel(k) {
+  return ({
+    content: 'चुनाव/कंटेंट गलत',
+    privacy: 'निजी जानकारी / नक़ल',
+    technical: 'तकनीकी गड़बड़ी',
+    other: 'कुछ और',
+  })[k] || 'कुछ और';
+}
+
+function devComplaintsHTML() {
+  if (!devComplaints) {
+    return '<div class="dev-card"><p class="muted">शिकायतें लोड हो रही हैं…</p></div>';
+  }
+  if (devComplaints.error) {
+    return `<div class="dev-card"><p class="muted">लोड नहीं हो पाया: ${esc(devComplaints.error)}</p></div>`;
+  }
+  const st = devComplaints.stats || {};
+  const list = devComplaints.complaints || [];
+  const oldest = st.oldestOpenAt
+    ? Math.floor((Date.now() - st.oldestOpenAt) / (1000 * 60 * 60))
+    : null;
+  return `
+  <div class="dev-stats" style="margin-bottom:16px">
+    <div class="dev-stat"><b>${fmt(st.total || 0)}</b><span>कुल शिकायतें</span></div>
+    <div class="dev-stat"><b>${fmt(st.open || 0)}</b><span>खुली</span></div>
+    <div class="dev-stat"><b>${fmt(st.resolved || 0)}</b><span>हल हुई</span></div>
+    <div class="dev-stat"><b>${oldest == null ? '—' : oldest + ' घं.'}</b><span>सबसे पुरानी खुली</span></div>
+  </div>
+  <div class="dev-card">
+    <div class="dev-card-head">
+      <h3>शिकायतें (नई सबसे ऊपर)</h3>
+      <span class="storage-chip">24 घं. पुष्टि · 15 दिन हल</span>
+    </div>
+    ${list.length ? list.map((c) => `
+      <div class="dev-top-item" style="align-items:flex-start;border-bottom:1px solid rgba(255,255,255,.08);padding:12px 0">
+        <div class="dev-top-main" style="flex:1">
+          <b>${esc(complaintKindLabel(c.kind))} · ticket ${esc(c.id)}</b>
+          <span class="muted small">
+            ${esc(timeAgo(c.at))} · ${c.status === 'open' ? '<b style="color:#f0a020">खुली</b>' : '<b style="color:#2fa84f">हल हुई</b>'}
+            ${c.electionCode ? ' · चुनाव <a class="link" href="#/developer/e/' + esc(c.electionCode) + '">' + esc(c.electionCode) + '</a>' : ''}
+          </span>
+          <div style="margin-top:6px;white-space:pre-wrap">${esc(c.message)}</div>
+          <div class="muted small" style="margin-top:6px">
+            ${c.name ? 'नाम: <b>' + esc(c.name) + '</b> · ' : ''}${c.contact ? 'संपर्क: <b>' + esc(c.contact) + '</b>' : 'संपर्क नहीं दिया'}
+            ${c.note ? ' · टिप्पणी: ' + esc(c.note) : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${c.status === 'open' ? `<button class="btn btn-ghost btn-sm" data-cid-resolve="${esc(c.id)}">हल हुई</button>` : ''}
+          <button class="btn btn-ghost btn-sm" data-cid-delete="${esc(c.id)}" style="opacity:.75">हटाओ</button>
+        </div>
+      </div>`).join('') : '<p class="muted">अभी कोई शिकायत नहीं है. 🎉</p>'}
+    <p class="muted small" style="margin-top:12px">
+      रिकॉर्ड 180 दिन तक रखा जाता है (IT Rules 2021). किसी अदालत/सरकारी आदेश पर कंटेंट 36 घंटे में हटाया जाएगा.
+    </p>
+  </div>`;
 }
 
 function devStatsHTML() {
@@ -5686,6 +5840,7 @@ function devBodyHTML() {
   if (devTab === 'summary') return devSummaryHTML();
   if (devTab === 'users') return devUsersHTML();
   if (devTab === 'elections') return devElectionsHTML();
+  if (devTab === 'complaints') return devComplaintsHTML();
   return devVotesHTML();
 }
 
@@ -5746,6 +5901,7 @@ function devSummaryHTML() {
   const topElections = [...devData.elections].sort((a, b) => b.totalVotes - a.totalVotes).slice(0, 5);
   return `
   ${goLiveHTML()}
+  ${usageMeterHTML()}
   <div class="dev-grid2">
     <div class="dev-card">
       <div class="dev-card-head"><h3>हाल के वोट</h3><button class="btn btn-ghost btn-sm" data-devt-jump="votes">सब देखें</button></div>
@@ -5882,6 +6038,43 @@ function devVotesHTML() {
 }
 
 function bindDevBody() {
+  /* 📩 शिकायत "हल हुई" बटन */
+  $$('[data-cid-resolve]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const id = b.dataset.cidResolve;
+      b.disabled = true; b.textContent = '…';
+      try {
+        await api('/api/dev/complaints/' + encodeURIComponent(id) + '/resolve', { method: 'POST', body: { note: '' } });
+        await loadDevComplaints();
+        const body = document.getElementById('devBody');
+        if (body) { body.innerHTML = devBodyHTML(); bindDevBody(); }
+        toast('शिकायत हल के रूप में दर्ज ✅', 'ok');
+      } catch (e) {
+        b.disabled = false; b.textContent = 'हल हुई';
+        toast(e.message || 'अपडेट नहीं हुआ', 'err');
+      }
+    });
+  });
+
+  /* 📩 शिकायत "हटाओ" बटन (स्पैम/टेस्ट साफ़ करने के लिए) */
+  $$('[data-cid-delete]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const id = b.dataset.cidDelete;
+      if (!window.confirm('शिकायत ' + id + ' हमेशा के लिए हटा दें?')) return;
+      b.disabled = true; b.textContent = '…';
+      try {
+        await api('/api/dev/complaints/' + encodeURIComponent(id) + '/delete', { method: 'POST' });
+        await loadDevComplaints();
+        const body = document.getElementById('devBody');
+        if (body) { body.innerHTML = devBodyHTML(); bindDevBody(); }
+        toast('शिकायत हट गई', 'ok');
+      } catch (e) {
+        b.disabled = false; b.textContent = 'हटाओ';
+        toast(e.message || 'नहीं हटी', 'err');
+      }
+    });
+  });
+
   /* चालू चुनाव के कार्ड → सिर्फ़ उसी चुनाव का पेज */
   $$('[data-e-open]').forEach((card) => {
     card.addEventListener('click', () => { location.hash = '#/developer/e/' + card.dataset.eOpen; });
@@ -5895,9 +6088,10 @@ function bindDevBody() {
   });
   startDevLeftTicker();
 
-  const jump = (tab) => {
+  const jump = async (tab) => {
     devTab = tab;
     $$('[data-devt]').forEach((b) => b.classList.toggle('active', b.dataset.devt === tab));
+    if (tab === 'complaints') await loadDevComplaints();
     document.getElementById('devBody').innerHTML = devBodyHTML();
     bindDevBody();
   };
@@ -6167,6 +6361,17 @@ function renderDisclaimer() {
         <h3>6. सामग्री व गोपनीयता</h3>
         <p>उपयोगकर्ता जो नाम, पार्टी या जानकारी जोड़ता है उसकी ज़िम्मेदारी उसकी स्वयं की है। मंच संचालक किसी भी अपमानजनक/अवैध सामग्री को हटाने का अधिकार रखते हैं।</p>
 
+        <h3>7. शिकायत, कंटेंट हटाना और रिकॉर्ड</h3>
+        <ul>
+          <li><b>शिकायत कहाँ करें:</b> <a href="#/grievance">शिकायत पेज</a> के फ़ॉर्म से, या ईमेल <a class="link" href="mailto:pawanverma992930@gmail.com">pawanverma992930@gmail.com</a> पर (Grievance Officer: जनमत का संचालक)।</li>
+          <li><b>24 घंटे:</b> शिकायत मिलने की पुष्टि और ticket नंबर।</li>
+          <li><b>15 दिन:</b> शिकायत का हल या लिखित जवाब।</li>
+          <li><b>36 घंटे:</b> किसी अदालत या सक्षम सरकारी एजेंसी के आदेश/नोटिस मिलने पर उस कंटेंट को हटाना या बंद करना (IT Act की धारा 79(3)(b) व IT Rules 2021 के नियम 3(1)(d) के अनुसार)।</li>
+          <li><b>72 घंटे:</b> निजी तस्वीरें/मॉर्फ्ड इमेज या नक़ल (impersonation) वाली शिकायत पर कार्रवाई।</li>
+          <li><b>रिकॉर्ड:</b> शिकायत और उससे जुड़ी जानकारी कम-से-कम <b>180 दिन</b> सुरक्षित रखी जाती है; जाँच चलने पर उस अवधि तक और उसके बाद 90 दिन तक।</li>
+          <li><b>आपकी ज़िम्मेदारी:</b> झूठी या दूसरों को नुकसान पहुँचाने वाली शिकायत न करें — ऐसा करने पर आपका उपयोग बंद किया जा सकता है।</li>
+        </ul>
+
         <div class="legal-foot">
           <p><b>सारांश:</b> यह शादी, सोसाइटी, गाँव, स्कूल या क्लब जैसे सामुदायिक फ़ैसलों के लिए एक सुविधाजनक टूल है — सरकारी चुनाव का विकल्प नहीं।</p>
         </div>
@@ -6238,7 +6443,7 @@ function renderTerms() {
         <p>ये शर्तें कभी भी अपडेट हो सकती हैं। जारी रखने का मतलब है नए नियमों की स्वीकृति।</p>
 
         <div class="legal-foot">
-          <p><b>संपर्क:</b> साइट के संचालक (डेवलपर) से <a href="#/developer">डेवलपर पेज</a> के माध्यम से संपर्क किया जा सकता है।</p>
+          <p><b>संपर्क / शिकायत:</b> साइट के संचालक (डेवलपर) से <a href="#/grievance">शिकायत पेज</a> के फ़ॉर्म से, या ईमेल <a class="link" href="mailto:pawanverma992930@gmail.com">pawanverma992930@gmail.com</a> पर संपर्क किया जा सकता है। हर शिकायत 24 घंटे में स्वीकार और 15 दिन में हल की जाती है।</p>
         </div>
       </div>
 
@@ -6309,6 +6514,9 @@ function renderPrivacy() {
 
         <h3>8. बच्चे</h3>
         <p>यह मंच 13 वर्ष से कम बच्चों के लिए नहीं बनाया गया; अभिभावक की सहमति के बिना उपयोग न करें।</p>
+
+        <h3>9. शिकायत कहाँ करें</h3>
+        <p>डेटा या साइट से जुड़ी कोई भी शिकायत <a href="#/grievance">शिकायत पेज</a> के फ़ॉर्म से, या ईमेल <a class="link" href="mailto:pawanverma992930@gmail.com">pawanverma992930@gmail.com</a> पर भेजें। शिकायत 24 घंटे में स्वीकार और 15 दिन में हल की जाती है।</p>
 
         <div class="legal-foot">
           <p><b>सहमति:</b> साइट का उपयोग जारी रखने का अर्थ है कि आप इस नीति से सहमत हैं।</p>
@@ -6384,6 +6592,135 @@ function showPageError(name, e) {
   } catch (_) {}
 })();
 
+
+/* =====================================================================
+   📩 शिकायत / Grievance — IT Rules 2021, Rule 3(2)
+   हर शिकायत 24 घंटे में स्वीकार, 15 दिन में हल। कोर्ट/सरकारी आदेश पर 36 घंटे में हटाना।
+   ===================================================================== */
+function renderGrievance() {
+  setActiveNav('');
+  clearPoll();
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const eCode = (q.get('e') || '').trim().toUpperCase().slice(0, 10);
+
+  app.innerHTML = `
+  <section class="section">
+    <div class="wrap wrap-narrow">
+      <div class="kicker">शिकायत / Grievance</div>
+      <h2 style="font-size:clamp(25px,3.4vw,35px);letter-spacing:-.025em">कुछ गड़बड़ है? हमें बताइए</h2>
+      <p class="muted" style="margin:8px 0 20px;font-size:13.4px">
+        यहाँ भेजी हर शिकायत दर्ज होती है और डेवलपर के पैनल में तुरंत दिखती है। किसी सरकारी चुनाव से इस साइट का कोई संबंध नहीं है।
+      </p>
+
+      <div class="legal-doc">
+        <div class="legal-warn">
+          ${ICON.shield}
+          <div>
+            <b>Grievance Officer:</b> जनमत का संचालक (डेवलपर)।<br>
+            <b>संपर्क:</b> नीचे का फ़ॉर्म (सबसे तेज़)${GRIEVANCE_EMAIL ? ' · ईमेल: <a class="link" href="mailto:' + esc(GRIEVANCE_EMAIL) + '?subject=%E0%A4%9C%E0%A4%A8%E0%A4%AE%E0%A4%A4%20%E0%A4%B6%E0%A4%BF%E0%A4%95%E0%A4%BE%E0%A4%AF%E0%A4%A4">' + esc(GRIEVANCE_EMAIL) + '</a>' : ' · या <a href="#/developer">डेवलपर पेज</a> से'}
+            <br><span class="muted small">शिकायत में अपना नाम और संपर्क (फ़ोन/ईमेल) ज़रूर लिखें — जवाब देने के लिए ज़रूरी है।</span>
+          </div>
+        </div>
+
+        <h3>समय-सीमा (हमारा वादा)</h3>
+        <ul>
+          <li><b>24 घंटे:</b> शिकायत मिलने की पुष्टि (ticket नंबर मिलेगा)।</li>
+          <li><b>15 दिन:</b> शिकायत का हल या साफ़ जवाब।</li>
+          <li><b>36 घंटे:</b> अदालत या सरकारी आदेश मिलने पर उस कंटेंट को हटाना/बंद करना।</li>
+          <li><b>72 घंटे:</b> निजी तस्वीरें, मॉर्फ्ड इमेज या किसी की नक़ल (impersonation) वाली शिकायत पर कार्रवाई।</li>
+        </ul>
+
+        <h3>किस बारे में शिकायत कर सकते हैं</h3>
+        <ul>
+          <li>किसी चुनाव में <b>गलत/अपमानजनक नाम</b> या फ़र्ज़ी उम्मीदवार।</li>
+          <li>किसी की <b>निजी जानकारी</b> बिना अनुमति डाली गई हो।</li>
+          <li>किसी और के नाम से <b>फ़र्ज़ी वोट</b> या फ़र्ज़ी चुनाव।</li>
+          <li>साइट में कोई <b>तकनीकी गड़बड़ी</b>।</li>
+        </ul>
+
+        <h3>शिकायत फ़ॉर्म</h3>
+        <form id="grForm" autocomplete="off">
+          <div class="form-grid">
+            <div class="field">
+              <label for="grKind">शिकायत का प्रकार</label>
+              <select id="grKind">
+                <option value="content">चुनाव / कंटेंट में गलत जानकारी</option>
+                <option value="privacy">निजी जानकारी या नक़ल</option>
+                <option value="technical">तकनीकी गड़बड़ी</option>
+                <option value="other">कुछ और</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="grCode">चुनाव कोड <span class="hint">(अगर किसी चुनाव के बारे में है)</span></label>
+              <input id="grCode" type="text" maxlength="10" value="${esc(eCode)}" placeholder="जैसे: 2P3ZYH" />
+            </div>
+            <div class="field">
+              <label for="grName">आपका नाम</label>
+              <input id="grName" type="text" maxlength="60" placeholder="आपका नाम" />
+            </div>
+            <div class="field">
+              <label for="grContact">संपर्क <span class="hint">(फ़ोन या ईमेल — जवाब देने के लिए)</span></label>
+              <input id="grContact" type="text" maxlength="80" placeholder="जैसे: 98xxxxxxxx" />
+            </div>
+            <div class="field full">
+              <label for="grMsg">शिकायत <span class="req">*</span></label>
+              <textarea id="grMsg" rows="5" maxlength="1000" placeholder="क्या गड़बड़ है, साफ़-साफ़ लिखिए…"></textarea>
+              <span class="hint" id="grCount">0 / 1000</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+            <button class="btn btn-primary" type="submit" id="grSend">शिकायत भेजें</button>
+            <a class="btn btn-ghost" href="#/">होम पर जाएँ</a>
+          </div>
+          <p class="muted small" style="margin-top:12px">भेजने पर शिकायत सर्वर पर सुरक्षित दर्ज हो जाती है। कोई फ़र्ज़ी शिकायत नहीं बनती — असली ticket नंबर मिलेगा।</p>
+        </form>
+        <div id="grDone"></div>
+      </div>
+    </div>
+  </section>`;
+
+  const form = document.getElementById('grForm');
+  const msg = document.getElementById('grMsg');
+  const cnt = document.getElementById('grCount');
+  if (msg && cnt) msg.addEventListener('input', () => { cnt.textContent = msg.value.length + ' / 1000'; });
+
+  if (form) form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const text = (msg.value || '').trim();
+    if (text.length < 5) return toast('कम से कम 5 अक्षर लिखें', 'err');
+    const btn = document.getElementById('grSend');
+    btn.disabled = true; btn.textContent = 'भेज रहे हैं…';
+    try {
+      const out = await api('/api/complaints', {
+        method: 'POST',
+        body: {
+          kind: document.getElementById('grKind').value,
+          electionCode: document.getElementById('grCode').value.trim(),
+          name: document.getElementById('grName').value.trim(),
+          contact: document.getElementById('grContact').value.trim(),
+          message: text,
+        },
+      });
+      form.style.display = 'none';
+      const done = document.getElementById('grDone');
+      if (done) done.innerHTML = `
+        <div class="legal-warn" style="border-color:#28a745">
+          ${ICON.shield}
+          <div>
+            <b>शिकायत दर्ज हो गई ✅</b><br>
+            आपका ticket नंबर: <b style="letter-spacing:.06em">${esc(out.id)}</b><br>
+            <span class="muted small">24 घंटे में पुष्टि, 15 दिन में हल — यही हमारा वादा है। ticket नंबर सँभाल कर रखें।</span>
+          </div>
+        </div>`;
+      toast('शिकायत दर्ज हो गई — ticket ' + out.id, 'ok');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'शिकायत भेजें';
+      toast(e.message || 'भेज नहीं पाए — फिर कोशिश करें', 'err');
+    }
+  });
+}
+
 function route() {
   const { parts } = parseHash();
   selectedCandidate = null;
@@ -6396,6 +6733,7 @@ function route() {
   if (parts[0] === 'disclaimer') return safeRender('disclaimer', () => renderDisclaimer());
   if (parts[0] === 'terms') return safeRender('terms', () => renderTerms());
   if (parts[0] === 'privacy') return safeRender('privacy', () => renderPrivacy());
+  if (parts[0] === 'grievance') return safeRender('grievance', () => renderGrievance());
   if (parts[0] === 'developer' && parts[1] === 'e' && parts[2]) return safeRender('developer', () => renderDevElection(parts[2].toUpperCase()));
   if (parts[0] === 'developer') return safeRender('developer', () => renderDeveloper());
   if (parts[0] === 'settings') return safeRender('settings', () => renderSettings(parts[1] || 'main'));

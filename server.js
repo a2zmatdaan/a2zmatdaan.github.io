@@ -90,6 +90,19 @@ let saveTimer = null;
 let pendingSave = null;
 let storageMode = USE_REDIS ? 'redis' : 'file';
 
+/* 📊 महीने की असली Redis command गिनती (डेव पैनल के usage meter के लिए)
+   हर सफल Redis request = 1 command. Upstash limit: 5,00,000/महीना. */
+function istMonthKey(ts = Date.now()) {
+  return istDayKey(ts).slice(0, 7);   /* YYYY-MM */
+}
+function bumpRedisCmd() {
+  if (!db) return;
+  const m = istMonthKey();
+  if (!db.meta || typeof db.meta !== 'object') db.meta = { month: m, cmds: 0 };
+  if (db.meta.month !== m) { db.meta.month = m; db.meta.cmds = 0; }
+  db.meta.cmds = (Number(db.meta.cmds) || 0) + 1;
+}
+
 async function redisRequest(pathname, body) {
   const res = await fetch(UPSTASH_URL + pathname, {
     method: body === undefined ? 'GET' : 'POST',
@@ -100,7 +113,24 @@ async function redisRequest(pathname, body) {
     body: body,
   });
   if (!res.ok) throw new Error('Redis HTTP ' + res.status);
-  return res.json();
+  const out = await res.json();
+  try { bumpRedisCmd(); } catch (_) {}
+  return out;
+}
+
+/* 🔁 पुराने DB में नए हिस्से जोड़ दो (data कभी नहीं मिटता) */
+function migrateDb(d) {
+  if (!d || typeof d !== 'object') return d;
+  if (!Array.isArray(d.complaints)) d.complaints = [];
+  if (!Array.isArray(d.users)) d.users = [];
+  if (!Array.isArray(d.elections)) d.elections = [];
+  if (!d.devSessions || typeof d.devSessions !== 'object') d.devSessions = {};
+  if (!d.deviceOwner || typeof d.deviceOwner !== 'object') d.deviceOwner = {};
+  if (!d.fpOwner || typeof d.fpOwner !== 'object') d.fpOwner = {};
+  if (!d.meta || typeof d.meta !== 'object') d.meta = { month: istMonthKey(), cmds: 0 };
+  if (typeof d.meta.cmds !== 'number') d.meta.cmds = 0;
+  if (!d.meta.month) d.meta.month = istMonthKey();
+  return d;
 }
 
 async function loadDb() {
@@ -111,7 +141,7 @@ async function loadDb() {
         const parsed = JSON.parse(out.result);
         if (parsed && parsed.version === 2) {
           console.log('📦 loaded from Upstash Redis');
-          return parsed;
+          return migrateDb(parsed);
         }
       }
       console.log('📦 Upstash empty — seeding fresh data');
@@ -126,7 +156,7 @@ async function loadDb() {
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.version === 2) return parsed;
+    if (parsed && parsed.version === 2) return migrateDb(parsed);
     console.log('ℹ️  old data format found — starting fresh (v2)');
   } catch (_) { /* fresh */ }
   const fresh = seedDb();
@@ -185,7 +215,7 @@ function seedDb() {
 
   // production me koi demo/fake data nahi — sirf khaali system
   if (!SEED_DEMO) {
-    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {}, deviceOwner: {}, fpOwner: {} };
+    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {}, deviceOwner: {}, fpOwner: {}, complaints: [], meta: { month: istMonthKey(now), cmds: 0 } };
   }
 
   const users = [];
@@ -665,6 +695,48 @@ async function handleApi(req, res, pathname) {
   }
 
   /* ---------- auth (name only) ---------- */
+  /* ---------- 📩 शिकायत / ग्रीवांस (सार्वजनिक, बिना लॉगिन) ----------
+     IT Rules 2021 Rule 3(2): हर शिकायत 24 घंटे में स्वीकार, 15 दिन में हल। */
+  if (method === 'POST' && parts[1] === 'complaints' && parts.length === 2) {
+    if (!rateLimit(req, 'complaint', 6, 10 * 60 * 1000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा शिकायतें भेजी गईं — कुछ मिनट बाद कोशिश करें' });
+    }
+    let body = null;
+    try { body = await readBody(req); } catch (_) { body = null; }
+    if (!body || typeof body !== 'object') return sendJson(res, 400, { error: 'शिकायत खाली है' });
+
+    const KINDS = ['content', 'privacy', 'technical', 'other'];
+    const kind = KINDS.includes(String(body.kind || '')) ? String(body.kind) : 'other';
+    const message = String(body.message || '').trim().slice(0, 1000);
+    if (message.length < 5) return sendJson(res, 400, { error: 'शिकायत कम से कम 5 अक्षर लिखें' });
+
+    const code = String(body.electionCode || '').trim().toUpperCase().slice(0, 10);
+    const election = code ? findElection(code) : null;
+
+    const item = {
+      id: rid(4).toUpperCase(),
+      at: Date.now(),
+      kind,
+      message,
+      name: String(body.name || '').trim().slice(0, 60),
+      contact: String(body.contact || '').trim().slice(0, 80),
+      electionCode: election ? election.code : null,
+      electionTitle: election ? election.title : null,
+      status: 'open',
+      resolvedAt: null,
+      note: '',
+    };
+    db.complaints.push(item);
+    await saveNow();
+    console.log('📩 new complaint', item.id, kind);
+    return sendJson(res, 201, {
+      ok: true,
+      id: item.id,
+      at: item.at,
+      sla: { ackHours: 24, resolveDays: 15, takedownHours: 36 },
+    });
+  }
+
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
     if (!rateLimit(req, 'login', 20, 60000)) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा लॉगिन कोशिशें। एक मिनट बाद प्रयास करें।' });
@@ -1364,7 +1436,57 @@ async function handleApi(req, res, pathname) {
       serverTime: Date.now(),
     };
 
-    return sendJson(res, 200, { stats, users, elections, votes: voteRows.slice(0, 1000) });
+    /* 📊 उपयोग मीटर — असली Redis command गिनती (इस अपडेट के बाद से) */
+    const monthKey = istMonthKey();
+    const usage = {
+      monthKey,
+      commands: (db.meta && db.meta.month === monthKey) ? (Number(db.meta.cmds) || 0) : 0,
+      commandQuota: 500000,
+      votesThisMonth: voteRows.filter((v) => istMonthKey(v.at) === monthKey).length,
+      electionsThisMonth: db.elections.filter((e) => istMonthKey(e.createdAt) === monthKey).length,
+      dbBytes: Buffer.byteLength(JSON.stringify(db), 'utf8'),
+      dbBytesQuota: 250 * 1024 * 1024,
+      openComplaints: db.complaints.filter((c) => c.status === 'open').length,
+    };
+
+    return sendJson(res, 200, { stats, usage, users, elections, votes: voteRows.slice(0, 1000) });
+  }
+
+  /* ---------- developer: शिकायतें (grievance dashboard) ---------- */
+  if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'complaints' && parts.length === 3) {
+    const list = [...db.complaints].sort((a, b) => b.at - a.at);
+    const open = list.filter((c) => c.status === 'open');
+    return sendJson(res, 200, {
+      complaints: list,
+      stats: {
+        total: list.length,
+        open: open.length,
+        resolved: list.length - open.length,
+        oldestOpenAt: open.length ? Math.min(...open.map((c) => c.at)) : null,
+      },
+    });
+  }
+
+  /* ---------- developer: शिकायत हटाओ (स्पैम/टेस्ट साफ़ करने के लिए) ---------- */
+  if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'complaints' && parts[3] && parts[4] === 'delete') {
+    const idx = db.complaints.findIndex((c) => c.id === String(parts[3]).toUpperCase());
+    if (idx === -1) return sendJson(res, 404, { error: 'शिकायत नहीं मिली' });
+    const [removed] = db.complaints.splice(idx, 1);
+    await saveNow();
+    return sendJson(res, 200, { ok: true, deleted: removed.id });
+  }
+
+  /* ---------- developer: शिकायत हल हुई ---------- */
+  if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'complaints' && parts[3] && parts[4] === 'resolve') {
+    const item = db.complaints.find((c) => c.id === String(parts[3]).toUpperCase());
+    if (!item) return sendJson(res, 404, { error: 'शिकायत नहीं मिली' });
+    let body = null;
+    try { body = await readBody(req); } catch (_) { body = null; }
+    item.status = 'resolved';
+    item.resolvedAt = Date.now();
+    item.note = String((body && body.note) || '').trim().slice(0, 300);
+    await saveNow();
+    return sendJson(res, 200, { ok: true, complaint: item });
   }
 
   /* developer: single election drill-down with who-voted-for-whom */

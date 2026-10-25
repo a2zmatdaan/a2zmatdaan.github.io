@@ -142,5 +142,49 @@ const notFound = `<!DOCTYPE html>
 </html>`;
 fs.writeFileSync(path.join(__dirname, '404.html'), notFound, 'utf8');
 
+/* =====================================================================
+   🔎 robots.txt + sitemap.xml
+   Google/Bing ko site milti rahe (search se log aayein).
+   SITE_URL env se badal sakte hain, warna GitHub Pages URL.
+   ===================================================================== */
+const SITE_URL = String(process.env.JANMAT_SITE_URL || 'https://a2zmatdaan.github.io').trim().replace(/\/+$/, '');
+
+const robots = `User-agent: *
+Allow: /
+Disallow: /developer
+Disallow: /settings
+
+Sitemap: ${SITE_URL}/sitemap.xml
+`;
+fs.writeFileSync(path.join(__dirname, 'robots.txt'), robots, 'utf8');
+fs.writeFileSync(path.join(PUB, 'robots.txt'), robots, 'utf8');
+
+const today = new Date().toISOString().slice(0, 10);
+const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${SITE_URL}/</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${SITE_URL}/#/explore</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>${SITE_URL}/#/how</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+</urlset>
+`;
+fs.writeFileSync(path.join(__dirname, 'sitemap.xml'), sitemap, 'utf8');
+fs.writeFileSync(path.join(PUB, 'sitemap.xml'), sitemap, 'utf8');
+
 console.log(`✅ built index.html + public/index.html (${kb} KB, self-contained)`);
 console.log('✅ built 404.html (सर्च/पुराने लिंक → सही पेज)');
+console.log(`✅ built robots.txt + sitemap.xml (${SITE_URL})`);

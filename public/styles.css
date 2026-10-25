@@ -1639,3 +1639,19 @@ body { display: flex; flex-direction: column; min-height: 100vh; }
 main#app { flex: 1 0 auto; }
 .site-footer { margin-top: auto; }
 @media (min-width: 900px) { main#app { min-height: 58vh; } }
+
+/* ============ 📊 उपयोग मीटर (डेव पैनल) ============ */
+.meter {
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .14);
+  overflow: hidden;
+  width: 100%;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width .35s ease;
+}
+:root[data-theme="light"] .meter { background: rgba(0, 0, 0, .12); }

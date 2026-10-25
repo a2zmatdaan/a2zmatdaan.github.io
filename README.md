@@ -66,7 +66,7 @@ jobs:
             rm -f "${z[0]}"
           fi
       - shell: bash
-        env: { DEV_PASSWORD: KHOHDEEG }
+        env: { DEV_PASSWORD: <Render Dashboard में सेट करें> }
         run: bash .github/scripts/setup.sh
 ```
 
@@ -114,7 +114,7 @@ node server.js
 
 | चीज़ | डिफ़ॉल्ट | कहाँ बदलें |
 |---|---|---|
-| **डेवलपर पासवर्ड** | `KHOHDEEG` | `DEV_PASSWORD` env variable |
+| **डेवलपर पासवर्ड** | `<Render Dashboard में सेट करें>` | `DEV_PASSWORD` env variable |
 | **प्रति यूज़र रोज़ चुनाव सीमा** | `2` | `DAILY_ELECTION_LIMIT` env variable |
 | **डेवलपर पेज** | `/#/developer` | — |
 | **पोर्ट** | `3000` | `PORT` |
@@ -134,7 +134,7 @@ DEV_PASSWORD="MeraNayaPassword" node server.js
 | 1 | **नाम से लॉगिन** | कोई पासवर्ड/OTP नहीं — सिर्फ़ नाम। वही नाम दोबारा लिखने पर वही खाता खुलता है। |
 | 2 | **1 मोबाइल = 1 वोट** | डिवाइस फिंगरप्रिंट (canvas + hardware + UA) + server-side IP/UA hash। एक डिवाइस से दूसरा नाम लेकर भी दोबारा वोट नहीं होता। |
 | 3 | **1 यूज़र = रोज़ 2 चुनाव** | IST कैलेंडर दिन के हिसाब से। तीसरा चुनाव बनाने पर साफ़ संदेश + रीसेट का समय। |
-| 4 | **सिर्फ़ आप (डेवलपर) सब देख सकते हैं** | `/#/developer` → पासवर्ड `KHOHDEEG` → हर यूज़र, उसके बनाए चुनाव, और **किसने किसको वोट दिया** — सब। |
+| 4 | **सिर्फ़ आप (डेवलपर) सब देख सकते हैं** | `/#/developer` → पासवर्ड `<Render Dashboard में सेट करें>` → हर यूज़र, उसके बनाए चुनाव, और **किसने किसको वोट दिया** — सब। |
 | 5 | **चुनाव बनाने वाला भी मतदाता नहीं देख सकता** | Public API में creator/voter की कोई जानकारी नहीं जाती (test की गई है)। आयोजक को सिर्फ़ गिनती + "बंद करें" बटन दिखता है। |
 | 6 | **लाइव परिणाम सबके लिए** | SSE (Server-Sent Events) से **असली रियल-टाइम** अपडेट — जैसे ही कोई वोट डालता है, सबके खुले पेज पर तुरंत बदलता है (पुराने ब्राउज़र में 6 सेकंड का पोलिंग फ़ॉलबैक)। |
 | 7 | **परिणाम हमेशा सुरक्षित** | वोट/चुनाव server पर सेव। Upstash Redis जोड़ते ही होस्टिंग रीस्टार्ट पर भी डेटा बचा रहता है। |
@@ -238,7 +238,7 @@ git push -u origin main
    - **Start Command**: `npm start`
    - **Instance Type**: `Free`
 4. **Environment Variables** में जोड़ें:
-   - `DEV_PASSWORD` = `KHOHDEEG` *(या अपना नया पासवर्ड)*
+   - `DEV_PASSWORD` = `<Render Dashboard में सेट करें>` *(या अपना नया पासवर्ड)*
    - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` *(डेटा स्थायी रखने के लिए)*
 5. **Create Web Service** → 2-3 मिनट में लिंक मिलेगा, जैसे
    `https://janmat.onrender.com` — यही दुनिया भर के लिए आपकी साइट है।

@@ -61,7 +61,7 @@ https://janmat-xxxx.onrender.com
 
 | Key | Value |
 |---|---|
-| `DEV_PASSWORD` | `KHOHDEEG` |
+| `DEV_PASSWORD` | `<Render Dashboard में सेट करें>` |
 | `DAILY_ELECTION_LIMIT` | `2` |
 | `SEED_DEMO` | `0` |
 | `NODE_VERSION` | `20` |

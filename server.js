@@ -8,7 +8,7 @@
    • 1 user = 2 chunav / din (IST calendar day)
    • 1 device = 1 vote per election  (device fingerprint + server IP fallback)
    • Creator & voter identity sirf developer dekh sakta hai
-   • Developer panel password se (default: KHOHDEEG)
+   • Developer panel password se (Render → Environment → DEV_PASSWORD)
    • Results permanent (JSON file ya Upstash Redis — jo available ho)
 
    Storage:
@@ -27,7 +27,9 @@ const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const PORT = Number(process.env.PORT || 3000);
-const DEV_PASSWORD = process.env.DEV_PASSWORD || 'KHOHDEEG';
+/* कोड में कोई default पासवर्ड नहीं — सिर्फ़ Render के Environment से।
+   खाली हो तो डेवलपर पैनल पूरी तरह बंद रहता है (सुरक्षित डिफ़ॉल्ट)। */
+const DEV_PASSWORD = String(process.env.DEV_PASSWORD || '');
 const DAILY_ELECTION_LIMIT = Math.max(1, Number(process.env.DAILY_ELECTION_LIMIT || 2));
 const SESSION_DAYS = 180;
 const DEV_SESSION_HOURS = 12;
@@ -431,8 +433,7 @@ function publicUser(u) {
 function deviceKeyFrom(req, bodyDevice) {
   const device = clean(bodyDevice || req.headers['x-device-id'] || '', 80);
   if (device && /^[A-Za-z0-9_-]{8,80}$/.test(device)) return 'd:' + sha256(device).slice(0, 40);
-  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  const ip = fwd || req.socket.remoteAddress || 'unknown';
+  const ip = clientIp(req);
   const ua = String(req.headers['user-agent'] || '');
   return 'ip:' + sha256(ip + '|' + ua).slice(0, 40);
 }
@@ -511,8 +512,38 @@ function readBody(req, limit = 512 * 1024) {
 }
 
 const rateBuckets = new Map();
+/* असली client IP — X-Forwarded-For spoof se bachne ke liye.
+   Cloudflare/Render proxy asli IP ko list ke AAKHIR me jodta hai, aur
+   CF-Connecting-IP ko Cloudflare khud likhta hai (client badal nahi sakta).
+   Pehle hum XFF ka PEHLA value lete the — wo client apne mann se bhej sakta
+   tha, isliye rate-limit bypass ho raha tha. */
+function clientIp(req) {
+  const xff = String(req.headers['x-forwarded-for'] || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  /* proxy asli IP ko list ke AAKHIR me jodta hai — pehla value client ka
+     bheja hua (spoof) ho sakta hai, isliye pehle AAKHIR dekhte hain */
+  if (xff.length) return xff[xff.length - 1];
+  const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+  if (cf) return cf;
+  return String(req.socket.remoteAddress || 'unknown');
+}
+
+/* कुछ sensitive cheezein (जैसे डेवलपर लॉगिन) पर IP की परवाह किए बिना एक
+   global limit भी — ताकि IP बदलकर भी बेतहाशा कोशिश न हो सके */
+function globalRateLimit(bucket, max, windowMs) {
+  const now = Date.now();
+  const key = 'G:' + bucket;
+  const e = rateBuckets.get(key) || { count: 0, reset: now + windowMs };
+  if (now > e.reset) { e.count = 0; e.reset = now + windowMs; }
+  e.count++;
+  rateBuckets.set(key, e);
+  return e.count <= max;
+}
+
 function rateLimit(req, bucket, max, windowMs = 60000) {
-  const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'x';
+  const ip = clientIp(req);
   const key = bucket + ':' + ip;
   const now = Date.now();
   const entry = rateBuckets.get(key) || { count: 0, reset: now + windowMs };
@@ -650,6 +681,39 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { user: publicUser(user), token, quota: quotaFor(user) });
   }
 
+  /* ---------- device rebind: is mobile ka na
+     agar kisi ne galti se doosra naam likh diya, to purana naam likhkar badal sakta hai ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'rebind') {
+    if (!rateLimit(req, 'rebind', 5, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा प्रयास। 10 मिनट बाद कोशिश करें।' });
+    }
+    const body = await readBody(req);
+    const device = deviceKeyFrom(req, body.deviceId);
+    if (!db.deviceOwner) db.deviceOwner = {};
+    const ownerId = db.deviceOwner[device];
+    if (!ownerId) {
+      return sendJson(res, 400, { error: 'इस मोबाइल पर कोई नाम बँधा नहीं है। सीधे लॉगिन करें।', code: 'NOT_BOUND' });
+    }
+    const owner = db.users.find((u) => u.id === ownerId);
+    const typedOld = nameKey(clean(body.oldName, 40));
+    const realOld = owner && !owner.deletedAt ? nameKey(owner.name) : null;
+
+    /* पुराना नाम सही लिखने पर ही बदलेगा — बिना जानकारी कोई दूसरा नहीं बदल सकता */
+    const okOld = realOld ? typedOld === realOld : true; // खाता हट चुका हो तो रोक नहीं
+    if (!okOld) {
+      return sendJson(res, 403, {
+        error: 'इस मोबाइल से जुड़ा पुराना नाम ग़लत है। वही नाम लिखें जिससे इस मोबाइल पर लॉगिन हुआ था।',
+        code: 'OLD_NAME_MISMATCH',
+        ownerName: owner && !owner.deletedAt ? owner.name : null,
+      });
+    }
+
+    delete db.deviceOwner[device];
+    if (owner && owner.devices) delete owner.devices[device];
+    await saveNow();
+    return sendJson(res, 200, { ok: true, freedFrom: realOld ? owner.name : null });
+  }
+
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'logout') {
     const token = clean(req.headers['x-user-token'] || '', 80);
     if (viewer && token && viewer.tokens[token]) {
@@ -778,6 +842,11 @@ async function handleApi(req, res, pathname) {
   const election = parts[1] === 'elections' && code ? findElection(code) : null;
 
   /* ---------- election: single ---------- */
+  if (method === 'GET' && parts[1] === 'elections' && code && parts.length === 3 && !election) {
+    /* galat ya delete ho chuka code — saaf message (pehle "API नहीं मिली" aata tha) */
+    return sendJson(res, 404, { error: 'यह चुनाव नहीं मिला — हो सकता है हटा दिया गया हो या कोड ग़लत हो।', code: 'ELECTION_NOT_FOUND' });
+  }
+
   if (method === 'GET' && election && parts.length === 3) {
     syncElection(election);
     return sendJson(res, 200, publicElection(election, viewer));
@@ -788,6 +857,7 @@ async function handleApi(req, res, pathname) {
     if (!viewer) {
       return sendJson(res, 401, { error: 'वोट देने के लिए पहले अपना नाम लिखकर लॉगिन करें।', code: 'LOGIN_REQUIRED' });
     }
+    syncElection(election);   /* समय पूरा हो गया हो तो अभी बंद करो */
     if (election.closed) {
       return sendJson(res, 403, { error: 'यह चुनाव समाप्त हो चुका है, अब वोट नहीं डाला जा सकता।' });
     }
@@ -968,6 +1038,14 @@ async function handleApi(req, res, pathname) {
     viewer.devices = {};
     viewer.lastLoginAt = Date.now();
 
+    /* इस डिवाइस की बाँध (binding) भी हटाओ, वरना वह मोबाइल हमेशा के लिए
+       "इस मोबाइल से पहले ... लॉगिन हो चुका है" पर अटक जाएगा */
+    if (db.deviceOwner) {
+      Object.keys(db.deviceOwner).forEach((d) => {
+        if (db.deviceOwner[d] === viewer.id) delete db.deviceOwner[d];
+      });
+    }
+
     await saveNow();
     broadcastDev('user-deleted', { userId: viewer.id, at: Date.now() });
     return sendJson(res, 200, { ok: true, message: 'आपका खाता हटा दिया गया। आपके वोटों की गिनती बरकरार रहेगी (बिना नाम के)।' });
@@ -975,8 +1053,11 @@ async function handleApi(req, res, pathname) {
 
   /* ================= developer API ================= */
   if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'login') {
-    if (!rateLimit(req, 'devlogin', 8, 10 * 60000)) {
+    if (!rateLimit(req, 'devlogin', 8, 10 * 60000) || !globalRateLimit('devlogin', 40, 10 * 60000)) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा प्रयास। 10 मिनट बाद कोशिश करें।' });
+    }
+    if (!DEV_PASSWORD) {
+      return sendJson(res, 503, { error: 'डेवलपर पैनल बंद है (DEV_PASSWORD सेट नहीं है)।' });
     }
     const body = await readBody(req);
     const pass = String(body.password == null ? '' : body.password);
@@ -1007,7 +1088,7 @@ async function handleApi(req, res, pathname) {
 
   /* ---------- live stream: election (public, anonymised) ---------- */
   if (method === 'GET' && parts[1] === 'stream') {
-    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'x';
+    const ip = clientIp(req);
     const mine = [...liveClients].filter((c) => c.ip === ip).length;
     if (mine >= 6) return sendJson(res, 429, { error: 'बहुत ज़्यादा लाइव कनेक्शन।' });
 
@@ -1040,7 +1121,7 @@ async function handleApi(req, res, pathname) {
     if (!sess || sess.expiresAt < Date.now()) {
       return sendJson(res, 401, { error: 'डेवलपर लॉगिन ज़रूरी है।', code: 'DEV_LOGIN_REQUIRED' });
     }
-    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'x';
+    const ip = clientIp(req);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -1303,6 +1384,11 @@ const server = http.createServer((req, res) => {
   server.listen(PORT, '0.0.0.0', () => {
     console.log('──────────────────────────────────────────────');
     console.log('🗳️  जनमत (Janmat) server v2');
+    if (!DEV_PASSWORD) {
+      console.log('🔒 DEV_PASSWORD सेट नहीं है — डेवलपर पैनल बंद रहेगा (Render → Environment में डालें)');
+    } else if (DEV_PASSWORD === 'KHOHDEEG') {
+      console.log('⚠️  DEV_PASSWORD पुराना/default है — बदल दें (यह repo/डॉक्स में सार्वजनिक था)');
+    }
     console.log(`   URL      : http://0.0.0.0:${PORT}`);
     console.log(`   Storage  : ${storageMode === 'redis' ? 'Upstash Redis (permanent)' : 'local file data/db.json'}`);
     console.log(`   Elections: ${db.elections.length} | Users: ${db.users.length}`);

@@ -87,7 +87,7 @@ repo में जाएँ → **Settings → Secrets and variables → Actions
 ```
 https://aapki-site/#/developer
 ```
-पासवर्ड: **`KHOHDEEG`** (बदलना हो तो repo variable `DEV_PASSWORD` सेट कर दें)
+पासवर्ड: **`<Render Dashboard में सेट करें>`** (बदलना हो तो repo variable `DEV_PASSWORD` सेट कर दें)
 
 वहाँ **"सिस्टम जाँच"** कार्ड में हर चीज़ का सच दिखता है:
 

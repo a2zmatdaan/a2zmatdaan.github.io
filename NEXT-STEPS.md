@@ -107,7 +107,7 @@ UPSTASH_REDIS_REST_TOKEN = AX...
 ```
 https://aapka-render-url/#/developer        या        https://a2zmatdaan.github.io/#/developer
 ```
-पासवर्ड: **`KHOHDEEG`**
+पासवर्ड: **`<Render Dashboard में सेट करें>`**
 
 वहाँ **"सिस्टम जाँच"** कार्ड में सब सच दिखेगा:
 - ✅ सर्वर जुड़ा है → हरा होना चाहिए

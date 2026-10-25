@@ -86,7 +86,7 @@ GitHub पर अपनी repo खोलें → **Add file → Upload files*
    नाम `SITE_URL`, वैल्यू `https://janmat-a1b2.onrender.com` → हर 14 मिनट में अपने आप जगता रहेगा।
 2. **डेटा हमेशा बचा रहे** (Render restart पर न मिटे) → [upstash.com](https://upstash.com) से मुफ़्त Redis बनाकर
    Render में दो env variables डालें: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`।
-3. **डेवलपर पासवर्ड** अभी `KHOHDEEG` है और repo में public है — Render → Environment में `DEV_PASSWORD` बदल दें।
+3. **डेवलपर पासवर्ड** अभी `<Render Dashboard में सेट करें>` है और repo में public है — Render → Environment में `DEV_PASSWORD` बदल दें।
 4. **GitHub Pages अकेला कभी साझा वोटिंग नहीं दे सकता** — यह उसकी सीमा है, आपकी गलती नहीं। उसका काम डिज़ाइन/डेमो दिखाना है;
    असली मतदान सर्वर (Render) से होगा।
 5. आगे चलकर अपना डोमेन (जैसे `janmat.in`) लेना हो तो Render में **Custom Domain** से जोड़ सकते हैं — तब

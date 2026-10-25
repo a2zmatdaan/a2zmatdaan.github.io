@@ -103,7 +103,7 @@ Repo में सिर्फ़ ये था:
 स्टैटिक साइट हर ब्राउज़र की अलग-अलग होती है (डेटा उसी ब्राउज़र में)। **एक लिंक पर सब मिलकर वोट करें** इसके लिए:
 1. `/home/user/janmat-fixed/` की सारी फ़ाइलें repo में upload करें (`server.js`, `package.json`, `public/`, `render.yaml`, …)
 2. [render.com](https://render.com) → GitHub login → **New + → Blueprint** → यही repo → **Apply**
-3. 2–3 मिनट में `https://janmat.onrender.com` live — डेवलपर पैनल `/#/developer`, पासवर्ड `KHOHDEEG`
+3. 2–3 मिनट में `https://janmat.onrender.com` live — डेवलपर पैनल `/#/developer`, पासवर्ड `<Render Dashboard में सेट करें>`
 
 ### 🧹 सफ़ाई
 - `janmat-v2.zip` repo से **delete** कर दें (अब ज़रूरत नहीं)।
@@ -136,6 +136,6 @@ janmat-fixed/
 
 1. **Pages और Render दोनों साथ** रखें: Pages = डिज़ाइन/डेमो देखने के लिए, Render = असली साझा वोटिंग के लिए।
    (या Pages वाली साइट में `API_BASE = 'https://janmat.onrender.com'` डालकर दोनों को जोड़ा जा सकता है — बताइए तो कर दूँ।)
-2. **डेवलपर पासवर्ड `KHOHDEEG`** repo में public है — बदलने के लिए Render में `DEV_PASSWORD` env variable सेट करें।
+2. **डेवलपर पासवर्ड `<Render Dashboard में सेट करें>`** repo में public है — बदलने के लिए Render में `DEV_PASSWORD` env variable सेट करें।
 3. **डेटा स्थायी** रखने के लिए Upstash Redis जोड़ें (README में तरीक़ा है) — Render free plan पर फ़ाइल वाला डेटा रीस्टार्ट पर मिट सकता है।
 4. "1 डिवाइस = 1 वोट" फ़िंगरप्रिंट ब्राउज़र-आधारित है — 100% सुरक्षा नहीं देता; असली सरकारी चुनाव के लिए यह मंच नहीं है (साइट पर डिस्क्लेमर भी है)।

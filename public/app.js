@@ -168,10 +168,12 @@ async function api(path, opts = {}) {
     body = JSON.stringify(opts.body);
   }
 
-  // Ek hi baar server check hota hai (JanmatOffline.ensure). Static hosting
-  // (GitHub Pages) ya file:// par seedha local preview mode chalta hai —
-  // network par /api ke 404 ki barish nahi hoti.
-  if (window.JanmatOffline && window.JanmatOffline.ensure) {
+  // 🔒 अगर असली सर्वर (Render) सेट है तो LOCAL/डेमो डेटा कभी नहीं बनाएँगे —
+  // वरना यूज़र ऐसा चुनाव बना बैठता जो दुनिया में कहीं नहीं होता (यही "कोई
+  // नकली चुनाव नहीं" का नियम है)। सर्वर बंद हो तो साफ़ मैसेज + फिर कोशिश।
+  if (API_BASE && window.JanmatOffline && window.JanmatOffline.ensure) {
+    try { await window.JanmatOffline.ensure(); } catch (_) {}
+  } else if (window.JanmatOffline && window.JanmatOffline.ensure) {
     let serverUp = true;
     try { serverUp = await window.JanmatOffline.ensure(); } catch (_) { serverUp = false; }
     if (!serverUp) return window.JanmatOffline.handle(path, Object.assign({}, opts, { headers }));
@@ -181,13 +183,18 @@ async function api(path, opts = {}) {
   try {
     res = await fetch(apiUrl(path), { method, headers, body });
   } catch (_) {
-    if (window.JanmatOffline) return window.JanmatOffline.handle(path, Object.assign({}, opts, { headers }));
-    throw new Error('सर्वर से कनेक्ट नहीं हो पाया। इंटरनेट जाँचें।');
+    if (!API_BASE && window.JanmatOffline) {
+      return window.JanmatOffline.handle(path, Object.assign({}, opts, { headers }));
+    }
+    showServerDownBar();
+    const errDown = new Error('सर्वर से कनेक्शन नहीं बना। Render का सर्वर सो रहा हो सकता है — 30–60 सेकंड रुककर "फिर कोशिश करें" दबाएँ।');
+    errDown.code = 'SERVER_DOWN';
+    throw errDown;
   }
   let data = {};
   let parsed = false;
   try { data = await res.json(); parsed = true; } catch (_) {}
-  if (!parsed && window.JanmatOffline) {
+  if (!parsed && !API_BASE && window.JanmatOffline) {
     try { return window.JanmatOffline.handle(path, Object.assign({}, opts, { headers })); } catch (_) {}
   }
   if (!res.ok) {
@@ -228,6 +235,7 @@ function subscribeElection(code, handlers) {
     gotData = true;
     try {
       const d = JSON.parse(ev.data);
+      if (d && d.deleted && handlers.onDeleted) { handlers.onDeleted(); return; }
       if (d && d.election && handlers.onUpdate) handlers.onUpdate(d.election);
     } catch (_) {}
   });
@@ -368,6 +376,21 @@ function electionLock(e) {
   const left = e.endsAt ? Math.max(0, e.endsAt - Date.now()) : 0;
   const timeUp = !!e.endsAt && left <= 0;
   return { locked: !e.closed && !timeUp, timeUp, left };
+}
+
+/* सर्वर बंद/सोया हुआ — साफ़ पट्टी + फिर कोशिश (fake डेटा नहीं बनेगा) */
+function showServerDownBar() {
+  window.JANMAT_OFFLINE = false;
+  if (document.getElementById('offlineBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'offlineBar';
+  bar.className = 'offline-bar';
+  bar.innerHTML = '<b>सर्वर से कनेक्शन नहीं बना</b> — Render का सर्वर सो रहा हो सकता है (पहली बार 30–60 सेकंड)। '
+    + 'तब तक कुछ भी सेव नहीं होगा। <button type="button" class="offline-retry" id="srvDownRetry">फिर कोशिश करें</button>';
+  document.body.insertBefore(bar, document.body.firstChild);
+  document.body.classList.add('has-offline-bar');
+  const btn = bar.querySelector('#srvDownRetry');
+  if (btn) btn.addEventListener('click', () => { btn.textContent = 'कोशिश हो रही है…'; location.reload(); });
 }
 
 /* =====================================================================
@@ -672,6 +695,51 @@ function loginCardHTML(opts = {}) {
   </div>`;
 }
 
+/* अगर इस मोबाइल पर पहले कोई दूसरा नाम बँधा है — पुराना नाम लिखकर बदलने का रास्ता
+   (वरना फ़ोन हमेशा के लिए उसी नाम पर अटक जाता था) */
+function askRebind(ownerName, desiredName, onDone) {
+  const old = document.getElementById('rebindModal');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'lc-overlay';
+  wrap.id = 'rebindModal';
+  wrap.innerHTML = `
+    <div class="lc-modal" style="text-align:left">
+      <h3 style="text-align:center">इस मोबाइल का नाम बदलें</h3>
+      <p class="lc-sub" style="text-align:center">इस मोबाइल से पहले ${ownerName ? '<b>' + esc(ownerName) + '</b>' : 'किसी और'} नाम से लॉगिन हुआ था।<br>नाम बदलने के लिए वही पुराना नाम नीचे लिखें।</p>
+      <input id="rebindOld" type="text" placeholder="पुराना नाम" maxlength="40" style="width:100%;padding:12px;border-radius:12px;border:1.5px solid #e2e0f2;font:inherit" />
+      <p class="lc-note">पुराना नाम याद नहीं? दूसरे मोबाइल से लॉगिन करें, या डेवलपर से कहें।</p>
+      <div class="lc-actions">
+        <button class="btn btn-primary" id="rebindGo">नाम बदलकर लॉगिन करें</button>
+        <button class="btn btn-ghost" id="rebindCancel">रद्द करें</button>
+      </div>
+      <div class="lc-urls" id="rebindMsg"></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  document.getElementById('rebindCancel').addEventListener('click', close);
+  document.getElementById('rebindOld').focus();
+  document.getElementById('rebindGo').addEventListener('click', async () => {
+    const oldName = document.getElementById('rebindOld').value.trim();
+    const msg = document.getElementById('rebindMsg');
+    if (oldName.length < 2) { msg.textContent = 'पुराना नाम लिखें।'; return; }
+    const btn = document.getElementById('rebindGo');
+    btn.disabled = true;
+    btn.textContent = 'बदल रहे हैं…';
+    try {
+      await api('/api/auth/rebind', { method: 'POST', body: { deviceId: DEVICE_ID, oldName } });
+      const res = await loginWithName(desiredName);
+      close();
+      toast('इस मोबाइल का नाम बदल गया — स्वागत है, ' + res.user.name + '!', 'ok');
+      if (onDone) onDone();
+    } catch (e) {
+      msg.textContent = e.message;
+      btn.disabled = false;
+      btn.textContent = 'नाम बदलकर लॉगिन करें';
+    }
+  });
+}
+
 function bindLoginCard(onDone) {
   const form = document.getElementById('inlineLoginForm');
   if (!form) return;
@@ -692,6 +760,7 @@ function bindLoginCard(onDone) {
       toast(e.message, 'err');
       btn.disabled = false;
       btn.textContent = 'लॉगिन करें';
+      if (e.code === 'DEVICE_TAKEN') askRebind((e.data && e.data.ownerName) || '', name, onDone);
     }
   });
 }
@@ -716,7 +785,7 @@ function electionCard(e) {
         ${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}
       </div>
       <div class="sym-row">${syms}</div>
-      ${e.endsAt && !e.closed ? `<div class="ecard-timer">⏳ <b data-ends="${e.endsAt}">${esc(fmtLeft(e.endsAt - Date.now()))}</b></div>` : ''}
+      ${e.endsAt && !e.closed ? `<div class="ecard-timer">⏳ <b>${esc(fmtLeft(e.remainingMs || 0))}</b></div>` : ''}
     </div>
     <div class="ecard-foot">
       <div class="ecard-votes">
@@ -1542,7 +1611,7 @@ function renderCreateSuccess(e, quota) {
           <div class="tb-ico">${ICON.clock}</div>
           <div>
             <h4>यह चुनाव ${esc(fmtDuration(e.durationMin || 0))} चलेगा</h4>
-            <p class="tb-left" id="createCountdown" data-ends="${e.endsAt || 0}">${e.endsAt ? esc(fmtLeft(e.endsAt - Date.now())) : ''}</p>
+            <p class="tb-left" id="createCountdown" data-ends="${e.endsAt || 0}" data-left="${e.remainingMs || 0}">${e.endsAt ? esc(fmtLeft(e.remainingMs || 0)) : ''}</p>
             <p class="muted" style="font-size:13px;margin-top:4px">
               समाप्ति: <b>${e.endsAt ? esc(fullDate(e.endsAt)) : '—'}</b> ·
               समय पूरा होते ही चुनाव अपने आप बंद हो जाएगा। 🔒 तब तक न बंद होगा, न हटेगा — लॉगआउट करने पर भी चलता रहेगा।
@@ -1560,8 +1629,10 @@ function renderCreateSuccess(e, quota) {
   bindCopyButtons();
   const cd = document.getElementById('createCountdown');
   if (cd && Number(cd.dataset.ends)) {
+    const base = Date.now();
+    const startLeft = Math.max(0, Number(cd.dataset.left) || 0);
     const tick = () => {
-      const left = Number(cd.dataset.ends) - Date.now();
+      const left = startLeft - (Date.now() - base);
       cd.textContent = left > 0 ? fmtLeft(left) : 'समय पूरा — चुनाव बंद हो गया';
       if (left <= 0) clearInterval(t);
     };
@@ -1710,7 +1781,7 @@ function electionHTML(d) {
       <div class="admin-row">
         <div>
           <h4 style="display:flex;align-items:center;gap:7px">${ICON.key} आयोजक नियंत्रण</h4>
-          ${d.endsAt ? `<p class="admin-timer-line">${ICON.clock} <b id="adminTimer" data-ends="${d.endsAt}">${esc(fmtLeft(lock.left))}</b> · कुल अवधि ${esc(fmtDuration(d.durationMin || 0))} · समाप्ति ${esc(fullDate(d.endsAt))}</p>` : ''}
+          ${d.endsAt ? `<p class="admin-timer-line">${ICON.clock} <b id="adminTimer" data-left="${d.remainingMs || 0}">${esc(fmtLeft(d.remainingMs || 0))}</b> · कुल अवधि ${esc(fmtDuration(d.durationMin || 0))} · समाप्ति ${esc(fullDate(d.endsAt))}</p>` : ''}
           <p>${lock.locked
             ? '🔒 चुनाव चल रहा है। तय समय से पहले न बंद होगा, न हटेगा — समय पूरा होते ही अपने आप बंद हो जाएगा।'
             : d.closed
@@ -1740,7 +1811,7 @@ function electionHTML(d) {
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1116 0z"/><circle cx="12" cy="10" r="3"/></svg> ${esc(d.gram)} · ${esc(d.district)} · ${esc(d.state)}</span>
         <span>${ICON.ballot} <b id="headVotes">${fmt(d.totalVotes)}</b> वोट पड़े</span>
         <span>${ICON.clock} ${timeAgo(d.createdAt)}</span>
-        ${d.endsAt && !d.closed ? `<span class="ehead-timer">⏳ <b data-ends="${d.endsAt}">${esc(fmtLeft(d.endsAt - Date.now()))}</b></span>` : ''}
+        ${d.endsAt && !d.closed ? `<span class="ehead-timer">⏳ <b data-left="${d.remainingMs || 0}">${esc(fmtLeft(d.remainingMs || 0))}</b></span>` : ''}
         ${d.endsAt && d.closed ? `<span class="ehead-timer done">समाप्त ${esc(shortDate(d.endsAt))}</span>` : ''}
         <span class="code-pill">कोड: <b>${esc(d.code)}</b></span>
       </div>
@@ -1846,6 +1917,11 @@ async function renderElection(code, opts = {}) {
     };
     const started = subscribeElection(d.code, {
       onUpdate: paint,
+      onDeleted: () => {
+        toast('यह चुनाव हटा दिया गया है।', 'err');
+        exploreCache = null;
+        location.hash = '#/explore';
+      },
       poll: pollOnce,
       onStatus: (st) => {
         noteMode = st === 'live' ? 'live' : 'poll';
@@ -1979,12 +2055,16 @@ function bindElectionPage(d) {
   }
 
   /* ---------- बचा समय — सबके लिए हर सेकंड अपडेट ---------- */
-  const ends = d.endsAt ? Number(d.endsAt) : 0;
-  const timerEls = $$('[data-ends]').filter((el) => Number(el.dataset.ends) > 1000000000000);
-  if (ends && timerEls.length) {
+  /* ⏱️ सर्वर ने जो "बचा समय" भेजा है उसी से गिनते हैं — फ़ोन की घड़ी ग़लत हो
+     तो भी सही रहेगा (पहले Date.now() से गिनते थे → घड़ी आगे होने पर पेज
+     बार-बार खुद रीलोड होता रहता था) */
+  const startLeft = d.endsAt ? Math.max(0, Number(d.remainingMs) || 0) : 0;
+  const tickBase = Date.now();
+  const timerEls = $$('[data-left]');
+  if (d.endsAt && !d.closed && timerEls.length) {
     let reloaded = false;
     const tick = () => {
-      const left = ends - Date.now();
+      const left = startLeft - (Date.now() - tickBase);
       timerEls.forEach((el) => {
         el.textContent = left > 0 ? fmtLeft(left) : 'समय पूरा';
       });
@@ -2075,6 +2155,9 @@ function renderLogin() {
       toast(e.message, 'err');
       btn.disabled = false;
       btn.textContent = 'लॉगिन करें';
+      if (e.code === 'DEVICE_TAKEN') {
+        askRebind((e.data && e.data.ownerName) || '', name, () => { location.hash = next ? '#/' + next : '#/settings'; });
+      }
     }
   });
 }
@@ -2227,8 +2310,7 @@ async function renderSettings(tab) {
 
   if (tab === 'elections') {
     $$('[data-count-to]').forEach((el) => {
-      const ends = Number(el.dataset.countTo);
-      el.textContent = fmtLeft(ends - Date.now());
+      el.textContent = fmtLeft(Number(el.dataset.countTo) || 0);
     });
     $$('[data-delete]').forEach((btn) => {
       let armed = false;
@@ -2394,7 +2476,7 @@ function settingsElectionsHTML(data) {
           <h3>${esc(e.title)}</h3>
           <p class="muted small">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)} · ${esc(timeAgo(e.createdAt))}</p>
           <p class="my-leading">${lead && lead.votes ? `आगे: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'अभी कोई वोट नहीं पड़ा'}</p>
-          ${e.endsAt ? `<p class="my-timer">${ICON.clock} ${e.closed ? 'समाप्त: ' + esc(fullDate(e.endsAt)) : '<b data-count-to="' + e.endsAt + '">' + esc(fmtLeft(e.endsAt - Date.now())) + '</b> · समाप्ति ' + esc(fullDate(e.endsAt))}</p>` : ''}
+          ${e.endsAt ? `<p class="my-timer">${ICON.clock} ${e.closed ? 'समाप्त: ' + esc(fullDate(e.endsAt)) : '<b data-count-to="' + (e.remainingMs || 0) + '">' + esc(fmtLeft(e.remainingMs || 0)) + '</b> · समाप्ति ' + esc(fullDate(e.endsAt))}</p>` : ''}
         </div>
         <div class="my-item-actions">
           <div class="my-votes"><b>${fmt(e.totalVotes)}</b><span>वोट</span></div>

@@ -11,7 +11,7 @@
   'use strict';
 
   var DB_KEY = 'jm_offline_db_v2';
-  var PREVIEW_DEV_PASS = 'KHOHDEEG';
+  var PREVIEW_DEV_PASS = 'PREVIEW-ONLY'; /* sirf local preview ke liye */
   var DAILY_LIMIT = 2;
   var db = null;
 
@@ -141,13 +141,28 @@
     /* FIX: poore app ko pata chale ki server nahi hai — warna app SSE/polling
        se /api ko baar-baar hit karta rehta hai (static hosting par 404 spam). */
     window.JANMAT_OFFLINE = true;
-    if (document.getElementById('offlineBar')) return;
-    var bar = document.createElement('div');
-    bar.id = 'offlineBar';
-    bar.className = 'offline-bar';
-    bar.innerHTML = '<b>डेमो प्रीव्यू</b> — यह पेज सिर्फ़ आपके ब्राउज़र में सेव होता है, इसलिए <b>अापका बनाया चुनाव दूसरों को नहीं दिखेगा</b>। सब लोग एक साथ देखें/वोट करें, इसके लिए साइट को सर्वर (Render) से जोड़ें।';
-    document.body.insertBefore(bar, document.body.firstChild);
-    document.body.classList.add('has-offline-bar');
+    var bar = document.getElementById('offlineBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'offlineBar';
+      bar.className = 'offline-bar';
+      document.body.insertBefore(bar, document.body.firstChild);
+      document.body.classList.add('has-offline-bar');
+    }
+    var hasServer = !!apiBase();
+    bar.innerHTML = hasServer
+      ? '<b>सर्वर से कनेक्शन नहीं बना</b> — साइट अभी डेमो मोड में चल रही है, इसलिए आपका बनाया चुनाव दूसरों को नहीं दिखेगा। '
+        + '(Render का सर्वर सोया हो सकता है — पहली बार खुलने में 30–60 सेकंड लगते हैं।) '
+        + '<button type="button" class="offline-retry">फिर कोशिश करें</button>'
+      : '<b>डेमो प्रीव्यू</b> — यह पेज सिर्फ़ आपके ब्राउज़र में सेव होता है, इसलिए <b>अापका बनाया चुनाव दूसरों को नहीं दिखेगा</b>। सब लोग एक साथ देखें/वोट करें, इसके लिए साइट को सर्वर (Render) से जोड़ें।';
+    var retry = bar.querySelector('.offline-retry');
+    if (retry) {
+      retry.addEventListener('click', function () {
+        try { sessionStorage.removeItem(CACHE_KEY); } catch (_) {}
+        bar.innerHTML = '<b>सर्वर जगा रहे हैं…</b> कृपया 10–20 सेकंड रुकें, पेज खुद रीलोड होगा।';
+        setTimeout(function () { location.reload(); }, 1200);
+      });
+    }
   }
 
   /* ------------------------- server probe -------------------------- */
@@ -172,12 +187,17 @@
     }
     // Pehle hi pata chal chuka ho (isi tab me) to dobara network chhedne ki
     // zarurat nahi — reload par bhi preview turant khulta hai.
+    /* "server nahi hai" yaad rakhne ki zarurat hai (404 spam na ho), par
+       hamesha ke liye nahi — 45 सेकंड बाद फिर कोशिश होती है, वरना सर्वर
+       आने के बाद भी पुराना टैब डेमो मोड में अटका रह जाता है। */
     try {
-      if (sessionStorage.getItem(CACHE_KEY) === '1') {
+      var cachedAt = Number(sessionStorage.getItem(CACHE_KEY) || 0);
+      if (cachedAt && Date.now() - cachedAt < 45000) {
         window.JANMAT_OFFLINE = true;
         probe = Promise.resolve(false);
         return probe;
       }
+      if (cachedAt) sessionStorage.removeItem(CACHE_KEY);
     } catch (_) {}
 
     var done = false;
@@ -193,14 +213,14 @@
         if (done) return !r.ok;
         done = true; clearTimeout(timer);
         window.JANMAT_OFFLINE = !r.ok;
-        if (!r.ok) { try { sessionStorage.setItem(CACHE_KEY, '1'); } catch (_) {} }
+        if (!r.ok) { try { sessionStorage.setItem(CACHE_KEY, String(Date.now())); } catch (_) {} }
         return !!r.ok;
       })
       .catch(function () {
         if (done) return false;
         done = true; clearTimeout(timer);
         window.JANMAT_OFFLINE = true;
-        try { sessionStorage.setItem(CACHE_KEY, '1'); } catch (_) {}
+        try { sessionStorage.setItem(CACHE_KEY, String(Date.now())); } catch (_) {}
         return false;
       });
     return probe;

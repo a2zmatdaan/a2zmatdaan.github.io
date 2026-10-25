@@ -26,7 +26,7 @@ services:
       - key: NODE_VERSION
         value: "20"
       - key: DEV_PASSWORD
-        value: "KHOHDEEG"      # डेवलपर पैनल का पासवर्ड — badalna ho to yahin badal dein
+        sync: false            # ⚠️ पासवर्ड repo में नहीं रहेगा — Render डैशबोर्ड में डालें
       - key: DAILY_ELECTION_LIMIT
         value: "2"
       - key: SEED_DEMO

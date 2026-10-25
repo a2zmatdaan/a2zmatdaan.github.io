@@ -515,52 +515,116 @@ const HERO = `
       </div>
     </div>
 
-    <div class="hero-visual" aria-hidden="true">
-      <div class="floaty tl">
-        <div class="floaty-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#0fa968" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
-        <div>वोट दर्ज हुआ<small>रामकिशन यादव</small></div>
-      </div>
-      <div class="ballot">
-        <div class="ballot-head">
-          <div class="ballot-title">सरपंच चुनाव · नीमगाँव</div>
-          <span class="ballot-live"><i></i> LIVE</span>
-        </div>
-        <div class="ballot-row picked">
-          <div class="ballot-sym" data-sym="diya"></div>
-          <div class="ballot-info">
-            <div class="ballot-name">रामकिशन यादव</div>
-            <div class="ballot-party">निर्दलीय</div>
-            <div class="ballot-bar"><i style="width:39%"></i></div>
-          </div>
-          <div class="ballot-check"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
-        </div>
-        <div class="ballot-row">
-          <div class="ballot-sym" data-sym="sunflower"></div>
-          <div class="ballot-info">
-            <div class="ballot-name">सुनीता देवी</div>
-            <div class="ballot-party">महिला मोर्चा</div>
-            <div class="ballot-bar"><i style="width:31%"></i></div>
-          </div>
-          <div class="ballot-check"></div>
-        </div>
-        <div class="ballot-row">
-          <div class="ballot-sym" data-sym="tractor"></div>
-          <div class="ballot-info">
-            <div class="ballot-name">मोहन लाल शर्मा</div>
-            <div class="ballot-party">ग्राम विकास पार्टी</div>
-            <div class="ballot-bar"><i style="width:19%"></i></div>
-          </div>
-          <div class="ballot-check"></div>
-        </div>
-        <div class="ballot-foot"><span>कुल 36 वोट</span><span>अलवर, राजस्थान</span></div>
-      </div>
-      <div class="floaty br">
-        <div class="floaty-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#c97a00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1116 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
-        <div>नीमगाँव<small>अलवर · राजस्थान</small></div>
-      </div>
-    </div>
+    <!-- hero ka visual: NAKLI data nahi — ya to asli chunav dikhta hai,
+         ya "3 aasan kadam" wala neutral card (heroVisualHTML se bharta hai) -->
+    <div class="hero-visual" id="heroVisual" aria-hidden="true"></div>
   </div>
 </section>`;
+
+/* =====================================================================
+   Hero ka visual — 100% imaandaar
+   ---------------------------------------------------------------------
+   • Agar koi ASLI chunav hai → usi ka card dikhta hai (asli naam, asli vote)
+   • Agar ek bhi chunav nahi hai → "3 aasan kadam" card (koi jhoota naam,
+     number ya "36 vote" jaisa nakli data nahi)
+   ===================================================================== */
+
+function heroStepsHTML() {
+  const step = (n, title, desc) => `
+    <div class="hstep">
+      <span class="hstep-n">${n}</span>
+      <div><b>${title}</b><span>${desc}</span></div>
+    </div>`;
+  return `
+  <div class="ballot ballot-hero">
+    <div class="ballot-head">
+      <div class="ballot-title">जनमत कैसे काम करता है</div>
+      <span class="ballot-live off"><i></i> नया</span>
+    </div>
+    ${step(1, 'अपना नाम लिखकर लॉगिन कीजिए', 'पासवर्ड या OTP की ज़रूरत नहीं — बस नाम')}
+    ${step(2, 'उम्मीदवार जोड़िए', 'चुनाव चिन्ह के साथ — 2 मिनट में तैयार')}
+    ${step(3, 'लिंक भेजिए या खोजिए', 'जो भी जहाँ भी हो, वोट कर सकेगा')}
+    <div class="ballot-foot"><span>एक डिवाइस = एक वोट</span><span>नतीजे लाइव</span></div>
+  </div>`;
+}
+
+function heroElectionHTML(e, detail) {
+  const rows = (detail && detail.candidates ? detail.candidates : [])
+    .slice()
+    .sort((a, b) => (b.votes || 0) - (a.votes || 0))
+    .slice(0, 3);
+
+  const body = rows.length
+    ? rows.map((c, i) => {
+        const votes = (detail.results && (detail.results.candidates || []).find((r) => r.id === c.id)) || {};
+        const pct = votes.percent || 0;
+        return `
+        <div class="ballot-row${i === 0 && detail.totalVotes ? ' picked' : ''}">
+          <div class="ballot-sym" data-sym="${esc(c.symbol || 'diya')}"></div>
+          <div class="ballot-info">
+            <div class="ballot-name">${esc(c.name)}</div>
+            <div class="ballot-party">${esc(c.party || 'निर्दलीय')}</div>
+            <div class="ballot-bar"><i style="width:${pct}%"></i></div>
+          </div>
+          <div class="ballot-check">${i === 0 && detail.totalVotes ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>' : ''}</div>
+        </div>`;
+      }).join('')
+    : `<div class="ballot-row"><div class="ballot-info"><div class="ballot-name">${esc(e.title)}</div>
+         <div class="ballot-party">${esc(e.candidateCount || 0)} उम्मीदवार</div></div></div>`;
+
+  return `
+  <div class="ballot ballot-hero">
+    <div class="ballot-head">
+      <div class="ballot-title">${esc(e.title)}</div>
+      <span class="ballot-live${e.closed ? ' off' : ''}"><i></i> ${e.closed ? 'समाप्त' : 'LIVE'}</span>
+    </div>
+    ${body}
+    <div class="ballot-foot">
+      <span>${fmt((detail && detail.totalVotes) || e.totalVotes || 0)} वोट</span>
+      <span>${esc([e.gram, e.district].filter(Boolean).join(', '))}</span>
+    </div>
+  </div>`;
+}
+
+async function fillHeroVisual(elections) {
+  const box = document.getElementById('heroVisual');
+  if (!box) return;
+
+  const live = (elections || []).find((e) => !e.closed) || (elections || [])[0];
+  if (!live) {
+    box.innerHTML = `
+      <div class="floaty tl">
+        <div class="floaty-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#0fa968" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+        <div>कोई डेमो नहीं<small>सिर्फ़ असली चुनाव</small></div>
+      </div>
+      ${heroStepsHTML()}`;
+    fillSymbolSlots(box);
+    return;
+  }
+
+  box.innerHTML = `
+    <div class="floaty tl">
+      <div class="floaty-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#0fa968" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+      <div>अभी लाइव चुनाव<small>${esc(live.gram || live.title)}</small></div>
+    </div>
+    ${heroElectionHTML(live, null)}`;
+  fillSymbolSlots(box);
+
+  // asli ummeedwar ke naam lane ke liye ek detail call (chunav hone par hi)
+  try {
+    const detail = await api('/api/elections/' + encodeURIComponent(live.code));
+    const stillThere = document.getElementById('heroVisual');
+    if (stillThere && detail) {
+      stillThere.innerHTML = `
+        <div class="floaty tl">
+          <div class="floaty-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#0fa968" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></div>
+          <div>अभी लाइव चुनाव<small>${esc(live.gram || live.title)}</small></div>
+        </div>
+        ${heroElectionHTML(live, detail)}`;
+      fillSymbolSlots(stillThere);
+    }
+  } catch (_) { /* summary card hi rehne do */ }
+}
 
 function fillSymbolSlots(root) {
   (root || document).querySelectorAll('[data-sym]').forEach((el) => {
@@ -688,6 +752,7 @@ async function renderHome() {
 
   fillSymbolSlots(app);
   bindOpenByCode();
+  fillHeroVisual(null);   // turant neutral card (khali jagah na dikhe)
 
   try {
     const [stats, list] = await Promise.all([api('/api/stats'), api('/api/elections')]);
@@ -696,6 +761,7 @@ async function renderHome() {
     set('stVotes', stats.votes);
     set('stCands', stats.candidates);
     set('stUsers', stats.users);
+    fillHeroVisual(list.elections);
     const box = document.getElementById('recentList');
     if (box) {
       box.innerHTML = list.elections.length

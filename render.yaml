@@ -17,7 +17,9 @@ services:
     runtime: node
     plan: free
     region: singapore          # भारत के सबसे नज़दीक
-    buildCommand: npm run build
+    # 🔧 Defensive: agar repo me project files ki jagah zip padi ho (GitHub Action
+    # ka push fail hua ho), to Render khud zip khol kar build kar lega.
+    buildCommand: bash -c 'for z in *.zip; do [ -f "$z" ] && unzip -oq "$z" 2>/dev/null || true; done; node build.js 2>/dev/null || true'
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:

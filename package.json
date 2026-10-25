@@ -1,0 +1,15 @@
+{
+  "name": "janmat",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Janmat — Hindi online community voting platform (zero deps, SSE live results, dark mode)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "node build.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

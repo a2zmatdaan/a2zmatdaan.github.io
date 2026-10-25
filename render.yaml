@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# जनमत — Render Blueprint (कुछ भरने की ज़रूरत नहीं, एक क्लिक में live)
+#
+# कैसे इस्तेमाल करें:
+#   1) यह repo GitHub पर डालिए (ZIP upload — Action खुद खोल देगा)
+#   2) यह link खोलिए:  https://render.com/deploy?repo=https://github.com/<USER>/<REPO>
+#   3) Render में GitHub से login → "Apply" दबाइए → 2–3 मिनट में साइट live
+#
+# यहाँ कोई भी field भरने/चुनने की ज़रूरत नहीं — सब कुछ नीचे तय है।
+# (branch अपने आप repo की default branch लेता है; auto-deploy नई service पर
+#  default रूप से चालू रहता है — इसलिए हर push पर site खुद update होती है।)
+# ---------------------------------------------------------------------------
+
+services:
+  - type: web
+    name: janmat
+    runtime: node
+    plan: free
+    region: singapore          # भारत के सबसे नज़दीक
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DEV_PASSWORD
+        value: "KHOHDEEG"      # डेवलपर पैनल का पासवर्ड — badalna ho to yahin badal dein
+      - key: DAILY_ELECTION_LIMIT
+        value: "2"
+      - key: SEED_DEMO
+        value: "0"             # 0 = बिलकुल खाली डेटाबेस, कोई डेमो डेटा नहीं

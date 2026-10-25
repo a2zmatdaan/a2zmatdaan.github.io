@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>जनमत — अपना चुनाव, अपना फैसला</title>
+<meta name="description" content="जनमत पर अपने गाँव, कॉलोनी या संस्था का चुनाव बनाएँ और दुनिया में कहीं से भी ऑनलाइन वोट डालें। सरपंच, प्रधान, अध्यक्ष, MLA — नाम से लॉगिन, एक डिवाइस एक वोट, लाइव परिणाम।" />
+<meta name="theme-color" content="#14183a" />
+<meta property="og:title" content="जनमत — ऑनलाइन मतदान" />
+<meta property="og:description" content="अपने गाँव का चुनाव, अब ऑनलाइन। नाम से लॉगिन, एक डिवाइस एक वोट, लाइव परिणाम।" />
+<meta property="og:type" content="website" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314183a'/%3E%3Cpath d='M14 34l10 10 24-26' stroke='%23ffb020' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#/">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+      </span>
+      <span class="brand-text">
+        <strong>जनमत</strong>
+        <small>Janmat · Online Voting</small>
+      </span>
+    </a>
+    <nav class="nav-links" aria-label="मुख्य मेन्यू">
+      <a href="#/" data-nav="home">होम</a>
+      <a href="#/explore" data-nav="explore">चुनाव खोजें</a>
+      <a href="#/how" data-nav="how">कैसे काम करता है</a>
+      <a href="#/settings" data-nav="settings">सेटिंग्स</a>
+    </nav>
+    <div class="nav-right">
+      <button class="icon-btn theme-toggle" id="navTheme" type="button" aria-label="डार्क मोड बदलें" title="डार्क / लाइट मोड">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="tt-moon" d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/><g class="tt-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></g></svg>
+      </button>
+      <span id="navAuth"></span>
+      <a class="btn btn-primary btn-sm nav-cta" href="#/create">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        चुनाव बनाएँ
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="app" aria-live="polite"></main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <span class="brand-mark small" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+      </span>
+      <div><strong>जनमत</strong> — हर आवाज़ गिनी जाएगी।</div>
+    </div>
+    <p class="footer-note">
+      <b>ज़रूरी सूचना:</b> यह एक निजी, गैर-सरकारी सामुदायिक मतदान मंच है — गाँव, कॉलोनी, सोसाइटी, स्कूल या संस्था के
+      अपने चुनावों के लिए। इसका <b>भारत सरकार, राज्य सरकार, पंचायत, नगरपालिका या भारत निर्वाचन आयोग से किसी भी प्रकार का
+      संबंध नहीं है</b>। इसके परिणाम किसी आधिकारिक/सरकारी चुनाव के लिए मान्य नहीं हैं।
+    </p>
+    <div class="footer-links">
+      <a href="#/terms">नियम व शर्तें</a>
+      <span>·</span>
+      <a href="#/privacy">गोपनीयता</a>
+      <span>·</span>
+      <a href="#/disclaimer">डिस्क्लेमर</a>
+      <span>·</span>
+      <a href="#/how">गाइड</a>
+      <span>·</span>
+      <a href="#/explore">चुनाव खोजें</a>
+      <span>·</span>
+      <a href="#/developer">डेवलपर</a>
+    </div>
+    <p class="footer-note dim">एक डिवाइस = एक वोट · रोज़ 2 चुनाव प्रति यूज़र · © <span id="year"></span> जनमत</p>
+  </div>
+</footer>
+
+<div id="toastWrap" class="toast-wrap" aria-live="assertive"></div>
+
+<!-- INLINE_CSS_MARKER -->
+<!-- Server ka address: is file me ek line badalni hai (config.js).
+     File na mile to site bas preview/local mode me chalegi — kuch nahi tootta. -->
+<script src="config.js"></script>
+<script src="api-base.js"></script>
+<script>
+/* Agar config.js load na ho (ya khali ho) to default = local/preview mode.
+   ⬇️  SIRF YAHAN EK LINE BADALNI HAI (LIVE / SHARED VOTING KE LIYE)  ⬇️⬇️
+   ---------------------------------------------------------------------
+   Agar site GitHub Pages par hai (static) to har browser ka data alag
+   rehta hai — isliye doosre log chunav nahi dekh paate.
+   SOLUTION: apne Render server ka URL yahan quote ke andar daal do, jaise:
+
+       window.JANMAT_API_BASE = 'https://janmat.onrender.com';
+
+   Phir GitHub Pages wali site bhi usi shared server se data legi aur
+   DUNIYA KE SAB LOG ek hi chunav dekh/vote kar payenge.
+   Khali ('') chhodne par site local/preview mode me chalegi.
+   ===================================================================== */
+window.JANMAT_API_BASE = window.JANMAT_API_BASE || '';
+</script>
+<script src="/symbols.js"></script>
+<!-- INLINE_JS_MARKER -->
+<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>

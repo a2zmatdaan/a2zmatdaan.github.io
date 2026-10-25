@@ -1833,6 +1833,12 @@ let countdownTimer = null;
 function clearPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  /* 🐞 FIX: डेव पैनल के single-चुनाव वाला 5-सेकंड टाइमर भी बंद करो —
+     वरना होम/सेटिंग्स पर जाने के बाद वह पुराना पेज वापस चिपका देता था। */
+  if (typeof devDetailTimer !== 'undefined' && devDetailTimer) {
+    clearInterval(devDetailTimer);
+    devDetailTimer = null;
+  }
   closeLive();
 }
 
@@ -2778,6 +2784,7 @@ async function renderDeveloper() {
         </div>
         <div class="dev-head-actions">
           <span class="storage-chip">${s.storage === 'redis' ? 'Upstash Redis · स्थायी' : 'लोकल फ़ाइल · db.json'}</span>
+          <button class="btn btn-ghost btn-sm" id="devExit">← पैनल से बाहर</button>
           <button class="btn btn-ghost btn-sm" id="devLogout">डेवलपर लॉगआउट</button>
         </div>
       </div>
@@ -2810,13 +2817,41 @@ async function renderDeveloper() {
   </section>
   <div id="devModal" class="sym-modal"></div>`;
 
+  /* 🚪 पैनल से बाहर — इतिहास (history) में पैनल की entry हटा देता है,
+     वरना फ़ोन का Back बटन बार-बार पैनल पर लौटा देता था (यही असली बग था)। */
+  const devExit = document.getElementById('devExit');
+  if (devExit) devExit.addEventListener('click', () => {
+    stopDevLive();
+    try { location.replace(pageBase() + '#/'); } catch (_) { location.hash = '#/'; }
+  });
+
   document.getElementById('devLogout').addEventListener('click', async () => {
     try { await api('/api/dev/logout', { method: 'POST' }); } catch (_) {}
     state.devToken = null;
     store.del('jm_dev_token');
     devData = null;
-    renderDevLogin();
+    stopDevLive();
+    /* लॉगआउट के बाद भी वापस पैनल पर न आए — इस entry को होम से बदल दो */
+    try { location.replace(pageBase() + '#/'); } catch (_) { renderDevLogin(); }
   });
+
+  /* 🔗 पैनल खुला है तो कोई भी अंदरूनी लिंक "replace" से खुले — ताकि Back
+     दबाने पर पैनल दोबारा न खिंचे। (होम/खोजें/गाइड/चुनाव — सब) */
+  if (!window.__devLinkFix) {
+    window.__devLinkFix = true;
+    document.addEventListener('click', (ev) => {
+      try {
+        if (!String(location.hash || '').startsWith('#/developer')) return;
+        const el = ev.target && ev.target.closest ? ev.target.closest('a[href^="#/"]') : null;
+        if (!el) return;
+        const href = el.getAttribute('href') || '';
+        if (!href || href.startsWith('#/developer')) return;
+        ev.preventDefault();
+        stopDevLive();
+        location.replace(pageBase() + href);
+      } catch (_) {}
+    }, true);
+  }
 
   $$('[data-devt]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -3156,9 +3191,24 @@ async function renderDevElection(code) {
   paintDevElection(d);
 
   /* हर 5 सेकंड में सिर्फ़ इसी चुनाव का ताज़ा डेटा */
+  if (devDetailTimer) { clearInterval(devDetailTimer); devDetailTimer = null; }
   devDetailTimer = setInterval(async () => {
+    /* 🐞 FIX: अगर यूज़र इस पेज से जा चुका है तो टाइमर बंद कर दो —
+       पुराना पेज कभी वापस नहीं चिपकेगा। */
+    const stillHere = String(location.hash || '').startsWith('#/developer/e/' + code);
+    if (!stillHere) {
+      clearInterval(devDetailTimer);
+      devDetailTimer = null;
+      return;
+    }
     try {
       const fresh = await api('/api/dev/elections/' + encodeURIComponent(code));
+      /* जवाब आने तक भी पेज बदल सकता है — फिर जाँचो */
+      if (!String(location.hash || '').startsWith('#/developer/e/' + code)) {
+        clearInterval(devDetailTimer);
+        devDetailTimer = null;
+        return;
+      }
       paintDevElection(fresh);
     } catch (_) {}
   }, 5000);
@@ -4247,7 +4297,15 @@ function route() {
   return safeRender('home', () => renderHome());
 }
 
-window.addEventListener('hashchange', () => { window.scrollTo({ top: 0 }); route(); setTimeout(startGlobalTicker, 60); });
+window.addEventListener('hashchange', () => {
+  window.scrollTo({ top: 0 });
+  /* पैनल से बाहर आ गए → लाइव फ़ीड (SSE) बंद करो */
+  if (typeof stopDevLive === 'function' && !String(location.hash || '').startsWith('#/developer')) {
+    try { stopDevLive(); } catch (_) {}
+  }
+  route();
+  setTimeout(startGlobalTicker, 60);
+});
 
 function bindNavTheme() {
   const btn = document.getElementById('navTheme');

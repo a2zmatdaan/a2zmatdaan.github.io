@@ -183,7 +183,7 @@ function seedDb() {
 
   // production me koi demo/fake data nahi — sirf khaali system
   if (!SEED_DEMO) {
-    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {} };
+    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {}, deviceOwner: {} };
   }
 
   const users = [];
@@ -295,6 +295,49 @@ function userByToken(token) {
   return db.users.find((u) => u.tokens && u.tokens[token]) || null;
 }
 
+/* =====================================================================
+   चुनाव की अवधि (timer) — निर्माता समय तय करता है
+   ---------------------------------------------------------------------
+   • चुनाव तय समय से पहले न बंद हो सकता, न हटाया जा सकता
+   • समय पूरा होते ही अपने आप बंद (auto-close) — कोई background job नहीं चाहिए
+   ===================================================================== */
+const MIN_DURATION_MIN = 1;              // कम से कम 1 मिनट
+const MAX_DURATION_MIN = 30 * 24 * 60;   // ज़्यादा से ज़्यादा 30 दिन
+const DEFAULT_DURATION_MIN = 24 * 60;    // डिफ़ॉल्ट 24 घंटे
+
+function normalizeDuration(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_DURATION_MIN;
+  return Math.min(MAX_DURATION_MIN, Math.max(MIN_DURATION_MIN, Math.round(n)));
+}
+
+/** समय पूरा हुआ? */
+function isTimeUp(e, now = Date.now()) {
+  return !!(e.endsAt && now >= e.endsAt);
+}
+
+/** लेज़ी auto-close — जब भी चुनाव पढ़ा जाए, समय देख लो */
+function syncElection(e, now = Date.now()) {
+  if (!e.closed && isTimeUp(e, now)) {
+    e.closed = true;
+    e.closedAt = e.endsAt;
+    e.autoClosed = true;
+    save();
+  }
+  return e;
+}
+
+/** 🔒 लॉक सिर्फ़ उन चुनावों पर जिनका टाइमर सेट है और समय बाकी है */
+function isLocked(e, now = Date.now()) {
+  return !!(e && !e.closed && e.endsAt && now < e.endsAt);
+}
+
+/** निर्माता समय से पहले कुछ नहीं बदल सकता */
+function remainingMs(e, now = Date.now()) {
+  if (!e || !e.endsAt) return 0;
+  return Math.max(0, e.endsAt - now);
+}
+
 function tally(e) {
   const counts = {};
   e.candidates.forEach((c) => (counts[c.id] = 0));
@@ -341,6 +384,12 @@ function publicSummary(e) {
     totalVotes: t.totalVotes,
     candidateCount: e.candidates.length,
     symbols: e.candidates.slice(0, 5).map((c) => c.symbol || 'diya'),
+    /* ---- timer ---- */
+    endsAt: e.endsAt || null,
+    durationMin: e.durationMin || null,
+    autoClosed: !!e.autoClosed,
+    remainingMs: remainingMs(e),
+    timeUp: isTimeUp(e),
   };
 }
 
@@ -355,6 +404,12 @@ function publicElection(e, viewer) {
     hasVoted: !!myVote,
     myVote,
     canManage: isCreator,
+    /* निर्माता समय से पहले बंद/डिलीट नहीं कर सकता; समय खत्म होने पर दोनों खुल जाते हैं */
+    canCloseNow: isCreator && !e.closed && !e.endsAt,
+    canDelete: isCreator && (!!e.closed || !e.endsAt || isTimeUp(e)),
+    lockReason: isCreator && isLocked(e)
+      ? 'चुनाव तय समय तक चलेगा — ' + Math.ceil(remainingMs(e) / 60000) + ' मिनट बाकी हैं, इससे पहले न बंद कर सकते हैं, न हटा सकते हैं।'
+      : null,
   };
 }
 
@@ -566,6 +621,20 @@ async function handleApi(req, res, pathname) {
     }
 
     const device = deviceKeyFrom(req, body.deviceId);
+
+    /* 🔒 एक मोबाइल/डिवाइस = एक नाम (कोई दूसरा नाम इसी डिवाइस से लॉगिन नहीं कर सकता) */
+    if (!db.deviceOwner) db.deviceOwner = {};
+    const ownerId = db.deviceOwner[device];
+    if (ownerId && ownerId !== user.id) {
+      const owner = db.users.find((u) => u.id === ownerId);
+      return sendJson(res, 403, {
+        error: `इस मोबाइल से पहले ${owner ? '"' + owner.name + '"' : 'किसी और'} नाम से लॉगिन हो चुका है। एक मोबाइल = एक नाम। उसी नाम से लॉगिन करें या दूसरा मोबाइल इस्तेमाल करें।`,
+        code: 'DEVICE_TAKEN',
+        ownerName: owner ? owner.name : null,
+      });
+    }
+    db.deviceOwner[device] = user.id;
+
     user.devices[device] = Date.now();
     if (Object.keys(user.devices).length > 40) {
       const entries = Object.entries(user.devices).sort((a, b) => b[1] - a[1]).slice(0, 40);
@@ -612,6 +681,7 @@ async function handleApi(req, res, pathname) {
       );
     }
     const states = [...new Set(db.elections.map((e) => e.state).filter(Boolean))].sort();
+    list.forEach((e) => syncElection(e));
     return sendJson(res, 200, { elections: list.slice(0, 300).map(publicSummary), states });
   }
 
@@ -633,6 +703,9 @@ async function handleApi(req, res, pathname) {
     }
 
     const body = await readBody(req);
+    const durationMin = normalizeDuration(
+      body.durationMin != null ? body.durationMin : DEFAULT_DURATION_MIN
+    );
     const type = clean(body.type, 40) || 'अन्य';
     const gram = clean(body.gram, 90);
     const district = clean(body.district, 60);
@@ -674,6 +747,10 @@ async function handleApi(req, res, pathname) {
       createdAt: Date.now(),
       closed: false,
       closedAt: null,
+      /* ---------- timer ---------- */
+      durationMin,
+      endsAt: Date.now() + durationMin * 60000,
+      autoClosed: false,
       creatorId: viewer.id,
       isDemo: false,
       candidates,
@@ -702,6 +779,7 @@ async function handleApi(req, res, pathname) {
 
   /* ---------- election: single ---------- */
   if (method === 'GET' && election && parts.length === 3) {
+    syncElection(election);
     return sendJson(res, 200, publicElection(election, viewer));
   }
 
@@ -776,6 +854,27 @@ async function handleApi(req, res, pathname) {
     if (!isCreator && !isDev) {
       return sendJson(res, 403, { error: 'सिर्फ़ चुनाव बनाने वाला (या डेवलपर) इसे बंद कर सकता है।' });
     }
+
+    /* 🔒 नियम: निर्माता तय समय से पहले न बंद कर सकता, न खोल सकता */
+    if (!isDev) {
+      if (parts[3] === 'close' && isLocked(election)) {
+        const left = Math.ceil(remainingMs(election) / 60000);
+        return sendJson(res, 403, {
+          error: `यह चुनाव तय समय तक चलेगा — अभी ${left} मिनट बाकी हैं। समय पूरा होते ही अपने आप बंद हो जाएगा।`,
+          code: 'TIMER_ACTIVE',
+          remainingMs: remainingMs(election),
+          endsAt: election.endsAt,
+        });
+      }
+      if (parts[3] === 'reopen' && election.endsAt && isTimeUp(election)) {
+        return sendJson(res, 403, {
+          error: 'जिस चुनाव का समय पूरा हो गया, उसे दोबारा नहीं खोला जा सकता। नया चुनाव बनाइए।',
+          code: 'TIMER_OVER',
+        });
+      }
+    }
+
+    syncElection(election);
     election.closed = parts[3] === 'close';
     election.closedAt = election.closed ? Date.now() : null;
     await saveNow();
@@ -785,13 +884,51 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, publicElection(election, viewer));
   }
 
+  /* ---------- election: delete (creator after timer ends / developer anytime) ---------- */
+  if (method === 'POST' && election && parts[3] === 'delete') {
+    const isCreator = !!viewer && election.creatorId === viewer.id;
+    const isDev = devTokenValid(req);
+
+    if (!isCreator && !isDev) {
+      return sendJson(res, 403, { error: 'सिर्फ़ चुनाव बनाने वाला ही इसे हटा सकता है।' });
+    }
+    syncElection(election);
+
+    /* 🔒 चुनाव चलते समय (टाइमर बाकी) निर्माता उसे नहीं हटा सकता */
+    if (!isDev && isLocked(election)) {
+      const left = Math.ceil(remainingMs(election) / 60000);
+      return sendJson(res, 403, {
+        error: `चुनाव अभी चल रहा है — ${left} मिनट बाकी हैं। समय पूरा होने के बाद ही हटा सकते हैं।`,
+        code: 'TIMER_ACTIVE',
+        remainingMs: remainingMs(election),
+        endsAt: election.endsAt,
+      });
+    }
+
+    const idx = db.elections.findIndex((e) => e.code === election.code);
+    if (idx === -1) return sendJson(res, 404, { error: 'चुनाव नहीं मिला।' });
+    db.elections.splice(idx, 1);
+    await saveNow();
+    broadcastDev('election-deleted', { code: election.code, by: isDev ? 'developer' : 'creator', at: Date.now() });
+    broadcastElection(election.code, { deleted: true, code: election.code });
+    return sendJson(res, 200, { ok: true, deleted: election.code });
+  }
+
   /* ---------- my area ---------- */
   if (method === 'GET' && parts[1] === 'me' && parts[2] === 'overview') {
     if (!viewer) return sendJson(res, 401, { error: 'लॉगिन नहीं है।', code: 'LOGIN_REQUIRED' });
+    db.elections.forEach((e) => syncElection(e));
+    const nowTs = Date.now();
     const myElections = db.elections
       .filter((e) => e.creatorId === viewer.id)
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((e) => ({ ...publicSummary(e), leading: tally(e).candidates[0] || null, canManage: true }));
+      .map((e) => ({
+        ...publicSummary(e),
+        leading: tally(e).candidates[0] || null,
+        canManage: true,
+        canDelete: !!(e.closed || !e.endsAt || isTimeUp(e, nowTs)),
+        remainingMs: remainingMs(e, nowTs),
+      }));
     const myVotes = db.elections
       .filter((e) => e.votes[viewer.id])
       .sort((a, b) => b.votes[viewer.id].at - a.votes[viewer.id].at)
@@ -1173,6 +1310,27 @@ const server = http.createServer((req, res) => {
     console.log('──────────────────────────────────────────────');
   });
 })();
+
+/* ⏱️ हर 20 सेकंड: जिन चुनावों का समय पूरा हो गया, उन्हें अपने आप बंद करो
+   और जुड़े हुए सब लोगों को तुरंत बता दो (कोई मैन्युअल काम नहीं) */
+const expiryTimer = setInterval(() => {
+  try {
+    const nowTs = Date.now();
+    let dirty = false;
+    for (const e of db.elections) {
+      if (!e.closed && isTimeUp(e, nowTs)) {
+        e.closed = true;
+        e.closedAt = e.endsAt;
+        e.autoClosed = true;
+        dirty = true;
+        try { broadcastElection(e.code, { election: publicElection(e, null) }); } catch (_) {}
+        try { broadcastDev('election-status', { code: e.code, closed: true, auto: true, at: nowTs }); } catch (_) {}
+      }
+    }
+    if (dirty) save();
+  } catch (_) {}
+}, 20000);
+if (expiryTimer.unref) expiryTimer.unref();
 
 process.on('SIGINT', async () => { try { await persistNow(); } catch (_) {} process.exit(0); });
 process.on('SIGTERM', async () => { try { await persistNow(); } catch (_) {} process.exit(0); });

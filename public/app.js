@@ -324,6 +324,269 @@ function csvCell(v) {
   return '"' + s + '"';
 }
 
+/* =====================================================================
+   टाइमर हेल्पर — चुनाव की अवधि और बचा समय
+   ===================================================================== */
+
+const SITE_URLS = ['a2zmatdaan.github.io', 'a2zmatdaan-github-io.onrender.com'];
+
+function shortDate(ts) {
+  try {
+    return new Date(ts).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch (_) { return ''; }
+}
+
+function fmtDuration(min) {
+  const m = Math.round(Number(min) || 0);
+  if (m <= 0) return '—';
+  if (m < 60) return m + ' मिनट';
+  if (m < 1440) {
+    const h = Math.floor(m / 60), r = m % 60;
+    return h + ' घंटे' + (r ? ' ' + r + ' मिनट' : '');
+  }
+  const d = Math.floor(m / 1440), hr = Math.round((m % 1440) / 60);
+  return d + ' दिन' + (hr ? ' ' + hr + ' घंटे' : '');
+}
+
+/** बचा समय — "2 घंटे 14 मिनट बाकी" / "4 मिनट 09 सेकंड बाकी" */
+function fmtLeft(ms) {
+  const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+  if (total <= 0) return 'समय पूरा';
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (d > 0) return `${d} दिन ${h} घंटे बाकी`;
+  if (h > 0) return `${h} घंटे ${m} मिनट बाकी`;
+  if (m > 0) return `${m} मिनट ${String(sec).padStart(2, '0')} सेकंड बाकी`;
+  return `${sec} सेकंड बाकी`;
+}
+
+/** 🔒 एक जगह से नियम तय — चुनाव चलते समय निर्माता कुछ नहीं बदल सकता */
+function electionLock(e) {
+  if (!e) return { locked: false, timeUp: false, left: 0 };
+  const left = e.endsAt ? Math.max(0, e.endsAt - Date.now()) : 0;
+  const timeUp = !!e.endsAt && left <= 0;
+  return { locked: !e.closed && !timeUp, timeUp, left };
+}
+
+/* =====================================================================
+   लॉगिन कार्ड इमेज — नाम वाली इमेज, जिसे सँभाल कर रखना है
+   (कैनवास से बनती है — कोई बाहरी सर्विस नहीं, ऑफ़लाइन भी चलती है)
+   ===================================================================== */
+
+function loginCardCanvas(name, when) {
+  const W = 1080, H = 1360;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const x = cv.getContext('2d');
+  const safe = (name || 'मतदाता').slice(0, 30);
+  const dateStr = when || new Date().toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'long', year: 'numeric' });
+
+  // पृष्ठभूमि
+  const g = x.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#2b1163');
+  g.addColorStop(0.5, '#4b2ea8');
+  g.addColorStop(1, '#0d1440');
+  x.fillStyle = g;
+  x.fillRect(0, 0, W, H);
+
+  // हल्के गोले (सजावट)
+  const blobs = [[140, 190, 260, 'rgba(255,255,255,.10)'], [980, 300, 200, 'rgba(255,190,90,.16)'], [860, 1240, 320, 'rgba(255,255,255,.07)']];
+  blobs.forEach(([cx, cy, r, col]) => {
+    const rg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+    rg.addColorStop(0, col);
+    rg.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = rg;
+    x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+  });
+
+  // सफ़ेद कार्ड
+  const pad = 64, cardX = pad, cardY = 96, cardW = W - pad * 2, cardH = 1000;
+  x.save();
+  x.shadowColor = 'rgba(0,0,0,.35)';
+  x.shadowBlur = 40; x.shadowOffsetY = 18;
+  roundRect(x, cardX, cardY, cardW, cardH, 44);
+  x.fillStyle = '#ffffff';
+  x.fill();
+  x.restore();
+
+  // शीर्ष पट्टी
+  x.save();
+  roundRect(x, cardX, cardY, cardW, 150, 44);
+  x.clip();
+  const hg = x.createLinearGradient(cardX, 0, cardX + cardW, 0);
+  hg.addColorStop(0, '#ff7a18');
+  hg.addColorStop(1, '#ffb347');
+  x.fillStyle = hg;
+  x.fillRect(cardX, cardY, cardW, 150);
+  x.restore();
+
+  x.textBaseline = 'middle';
+  x.fillStyle = '#ffffff';
+  x.font = '700 44px "Noto Sans Devanagari", system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  x.fillText('A2Z Janmat', cardX + 48, cardY + 62);
+  x.font = '600 26px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillStyle = 'rgba(255,255,255,.92)';
+  x.fillText('लोकतंत्र · आपकी आवाज़', cardX + 48, cardY + 108);
+  // मुहर
+  x.beginPath(); x.arc(cardX + cardW - 78, cardY + 76, 46, 0, Math.PI * 2);
+  x.fillStyle = 'rgba(255,255,255,.22)'; x.fill();
+  x.fillStyle = '#fff'; x.font = '700 42px system-ui, sans-serif';
+  x.textAlign = 'center'; x.fillText('🗳', cardX + cardW - 78, cardY + 78); x.textAlign = 'left';
+
+  // "यह आपका लॉगिन कार्ड है"
+  x.fillStyle = '#7a6fa8';
+  x.font = '600 24px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillText('यह आपका लॉगिन कार्ड है', cardX + 56, cardY + 210);
+
+  // नाम
+  x.fillStyle = '#170c46';
+  let fs = 76;
+  x.font = '800 ' + fs + 'px "Noto Sans Devanagari", system-ui, sans-serif';
+  while (x.measureText(safe).width > cardW - 112 && fs > 34) {
+    fs -= 4;
+    x.font = '800 ' + fs + 'px "Noto Sans Devanagari", system-ui, sans-serif';
+  }
+  x.fillText(safe, cardX + 56, cardY + 300);
+
+  // नाम के नीचे लकीर
+  x.fillStyle = '#ece8ff';
+  x.fillRect(cardX + 56, cardY + 352, cardW - 112, 3);
+
+  // मुख्य नोट
+  const note = 'इसे अच्छे से सँभाल कर रखें —';
+  const note2 = 'इसी से आप लॉगिन कर पाएंगे।';
+  x.fillStyle = '#b3241c';
+  x.font = '700 40px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillText(note, cardX + 56, cardY + 424);
+  x.fillStyle = '#170c46';
+  x.fillText(note2, cardX + 56, cardY + 478);
+
+  // सूचना बॉक्स
+  x.save();
+  roundRect(x, cardX + 56, cardY + 530, cardW - 112, 168, 24);
+  x.fillStyle = '#f5f2ff'; x.fill();
+  x.restore();
+  const lines = [
+    'लॉगिन का तरीक़ा: सिर्फ़ अपना नाम लिखिए (कोई पासवर्ड नहीं)।',
+    'एक मोबाइल = एक नाम — इसी मोबाइल से यही नाम याद रखें।',
+    'यह इमेज खो गई तो नाम याद रखें, लॉगिन फिर भी हो जाएगा।',
+  ];
+  x.font = '500 25px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillStyle = '#3b3266';
+  lines.forEach((ln, i) => x.fillText('•  ' + ln, cardX + 84, cardY + 586 + i * 44));
+
+  // तारीख़
+  x.font = '600 24px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillStyle = '#8b82b4';
+  x.fillText('लॉगिन तारीख़: ' + dateStr, cardX + 56, cardY + 760);
+
+  // होलोग्राम-सा निशान
+  x.save();
+  const hx = cardX + cardW - 190, hy = cardY + 740;
+  const rg2 = x.createLinearGradient(hx, hy, hx + 130, hy + 130);
+  rg2.addColorStop(0, '#ffd76e'); rg2.addColorStop(.5, '#ff9d4d'); rg2.addColorStop(1, '#7a5cff');
+  x.beginPath(); x.arc(hx + 65, hy + 55, 62, 0, Math.PI * 2);
+  x.fillStyle = rg2; x.fill();
+  x.fillStyle = '#2b1163'; x.textAlign = 'center';
+  x.font = '800 22px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillText('असली', hx + 65, hy + 44);
+  x.fillText('कार्ड', hx + 65, hy + 72);
+  x.textAlign = 'left';
+  x.restore();
+
+  // कार्ड के अंदर नीचे की पट्टी
+  x.fillStyle = '#f0edff';
+  x.fillRect(cardX, cardY + cardH - 104, cardW, 104);
+  x.fillStyle = '#5b4bb8';
+  x.font = '600 23px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillText('यह कार्ड सिर्फ़ आपके लिए है — किसी और को न दें।', cardX + 56, cardY + cardH - 52);
+
+  // बाहर वॉटरमार्क — दोनों पते
+  x.fillStyle = 'rgba(255,255,255,.94)';
+  x.font = '700 34px system-ui, "Segoe UI", Roboto, sans-serif';
+  x.textAlign = 'center';
+  x.fillText(SITE_URLS[0], W / 2, H - 150);
+  x.font = '600 30px system-ui, "Segoe UI", Roboto, sans-serif';
+  x.fillStyle = 'rgba(255,255,255,.86)';
+  x.fillText(SITE_URLS[1], W / 2, H - 100);
+  x.font = '600 24px "Noto Sans Devanagari", system-ui, sans-serif';
+  x.fillStyle = 'rgba(255,255,255,.62)';
+  x.fillText('इन दोनों पतों पर यह मंच हमेशा मिलेगा', W / 2, H - 50);
+  x.textAlign = 'left';
+
+  return cv;
+}
+
+function roundRect(ctx, x0, y0, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x0 + r, y0);
+  ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r);
+  ctx.arcTo(x0 + w, y0 + h, x0, y0 + h, r);
+  ctx.arcTo(x0, y0 + h, x0, y0, r);
+  ctx.arcTo(x0, y0, x0 + w, y0, r);
+  ctx.closePath();
+}
+
+function loginCardFileName(name) {
+  const safe = String(name || 'janmat').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'janmat';
+  return 'a2z-janmat-login-' + safe + '.png';
+}
+
+/** इमेज बनाओ, दिखाओ और डाउनलोड कराओ */
+function openLoginCard(name, opts) {
+  const first = !opts || opts.first !== false;
+  let canvas;
+  try {
+    canvas = loginCardCanvas(name);
+  } catch (err) {
+    return;
+  }
+  const dataUrl = canvas.toDataURL('image/png');
+  const fileName = loginCardFileName(name);
+
+  // डाउनलोड (पहली बार लॉगिन पर अपने आप)
+  if (first) {
+    try {
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 800);
+    } catch (_) {}
+  }
+
+  showLoginCardModal(dataUrl, fileName, name, first);
+}
+
+function showLoginCardModal(dataUrl, fileName, name, first) {
+  const old = document.getElementById('loginCardModal');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'lc-overlay';
+  wrap.id = 'loginCardModal';
+  wrap.innerHTML = `
+    <div class="lc-modal" role="dialog" aria-modal="true" aria-label="लॉगिन कार्ड">
+      <button class="lc-x" id="lcClose" aria-label="बंद करें">✕</button>
+      <h3>${first ? 'आपका लॉगिन कार्ड' : 'लॉगिन कार्ड'}</h3>
+      <p class="lc-sub">${first ? 'इमेज डाउनलोड हो रही है — गैलरी/डाउनलोड्स में देखें।' : 'नीचे से इमेज डाउनलोड करें।'}</p>
+      <img src="${dataUrl}" alt="लॉगिन कार्ड — ${esc(name)}" />
+      <div class="lc-note">🔒 <b>इसे अच्छे से सँभाल कर रखें</b> — इसी से आप लॉगिन कर पाएंगे।</div>
+      <div class="lc-actions">
+        <a class="btn btn-primary" id="lcDl" download="${esc(fileName)}" href="${dataUrl}">इमेज फिर डाउनलोड करें</a>
+        <button class="btn btn-ghost" id="lcClose2">बंद करें</button>
+      </div>
+      <p class="lc-urls">${SITE_URLS[0]}<br>${SITE_URLS[1]}</p>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  document.getElementById('lcClose').addEventListener('click', close);
+  document.getElementById('lcClose2').addEventListener('click', close);
+  wrap.addEventListener('click', (ev) => { if (ev.target === wrap) close(); });
+}
+
 /* --------------------------- nav / auth -------------------------- */
 
 function renderNavAuth() {
@@ -352,6 +615,8 @@ async function loginWithName(name) {
   state.quota = res.quota;
   store.set('jm_token', res.token);
   renderNavAuth();
+  /* 🎴 नाम वाली लॉगिन इमेज — सँभाल कर रखने के लिए (अपने आप डाउनलोड) */
+  try { openLoginCard(res.user.name, { first: true }); } catch (_) {}
   return res;
 }
 
@@ -401,7 +666,8 @@ function loginCardHTML(opts = {}) {
       <input id="inlineName" type="text" placeholder="आपका नाम (जैसे: रवि शर्मा)" maxlength="30" aria-label="आपका नाम" />
       <button class="btn btn-primary" type="submit" id="inlineLoginBtn">लॉगिन करें</button>
     </form>
-    <p class="login-note">एक नाम = एक खाता। इसीलिए वही नाम दोबारा लिखें जिससे आप आगे भी लॉगिन करेंगे।</p>
+    <p class="login-note">एक नाम = एक खाता, और एक मोबाइल = एक नाम। वही नाम दोबारा लिखें जिससे आप आगे भी लॉगिन करेंगे।</p>
+    <p class="login-note thin">लॉगिन करते ही आपके नाम वाली एक इमेज (लॉगिन कार्ड) डाउनलोड होगी — उसे सँभाल कर रखें।</p>
     <p class="login-note thin">आगे बढ़ने पर आप <a href="#/disclaimer">डिस्क्लेमर व नियम</a> स्वीकार करते हैं।</p>
   </div>`;
 }
@@ -450,6 +716,7 @@ function electionCard(e) {
         ${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}
       </div>
       <div class="sym-row">${syms}</div>
+      ${e.endsAt && !e.closed ? `<div class="ecard-timer">⏳ <b data-ends="${e.endsAt}">${esc(fmtLeft(e.endsAt - Date.now()))}</b></div>` : ''}
     </div>
     <div class="ecard-foot">
       <div class="ecard-votes">
@@ -1062,6 +1329,32 @@ async function renderCreate() {
           <button type="button" class="btn btn-ghost btn-sm" id="addCand" style="margin-top:12px">＋ उम्मीदवार जोड़ें</button>
         </div>
 
+        <div style="margin-top:30px" id="timerBox">
+          <div class="section-title">
+            <h2 style="font-size:18px">चुनाव कितनी देर चलेगा? <span class="req">*</span></h2>
+            <span class="count" id="durShow">24 घंटे</span>
+          </div>
+          <p class="hint" style="margin-bottom:12px;color:var(--muted);font-size:13.2px">
+            समय आप तय करेंगे। <b>टाइमर चालू होने के बाद आप चुनाव को जल्दी बंद नहीं कर सकेंगे और न ही हटा सकेंगे</b> —
+            समय पूरा होते ही चुनाव अपने आप बंद हो जाएगा और परिणाम घोषित हो जाएगा।
+          </p>
+          <div class="dur-chips" id="durChips">
+            ${[[1, '1 मिनट'], [2, '2 मिनट'], [5, '5 मिनट'], [30, '30 मिनट'], [60, '1 घंटा'], [120, '2 घंटे'], [360, '6 घंटे'], [1440, '24 घंटे']]
+              .map(([m, l]) => `<button type="button" class="dur-chip${m === 1440 ? ' sel' : ''}" data-min="${m}">${l}</button>`).join('')}
+          </div>
+          <div class="dur-custom">
+            <label for="durValue">अपनी संख्या लिखें</label>
+            <input id="durValue" type="number" min="1" step="1" inputmode="numeric" placeholder="जैसे 50 या 100" />
+            <select id="durUnit" aria-label="इकाई">
+              <option value="1">मिनट</option>
+              <option value="60">घंटे</option>
+              <option value="1440">दिन</option>
+            </select>
+          </div>
+          <input type="hidden" id="durationMin" value="1440" />
+          <p class="lock-note" id="timerNote">${ICON.lock || ICON.shield} यह चुनाव 24 घंटे तक चलेगा — तब तक न बंद होगा, न हटेगा। लॉगआउट करने पर भी चुनाव चलता रहेगा।</p>
+        </div>
+
         <div class="form-actions">
           <button class="btn btn-primary btn-lg" type="submit" id="submitBtn">चुनाव बनाएँ →</button>
           <span class="req-note">${esc(state.user.name)} के नाम से बनेगा · बिलकुल मुफ़्त</span>
@@ -1112,6 +1405,39 @@ async function renderCreate() {
       : typeSel.value;
     titleInput.value = gram ? `${gram} — ${type} चुनाव` : '';
   }
+  /* ---------- टाइमर चुनने का तरीक़ा ---------- */
+  const durHidden = document.getElementById('durationMin');
+  const durValue = document.getElementById('durValue');
+  const durUnit = document.getElementById('durUnit');
+  const durShow = document.getElementById('durShow');
+  const timerNote = document.getElementById('timerNote');
+  let durationMin = 1440;
+
+  function setDuration(min, fromCustom) {
+    durationMin = Math.max(1, Math.min(43200, Math.round(Number(min) || 1440)));
+    durHidden.value = String(durationMin);
+    durShow.textContent = fmtDuration(durationMin);
+    timerNote.innerHTML = `${ICON.shield} यह चुनाव ${esc(fmtDuration(durationMin))} तक चलेगा — तब तक न बंद होगा, न हटेगा। लॉगआउट करने पर भी चुनाव चलता रहेगा।`;
+    if (!fromCustom) {
+      $$('#durChips .dur-chip').forEach((c) => c.classList.toggle('sel', Number(c.dataset.min) === durationMin));
+    }
+  }
+  $$('#durChips .dur-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      durValue.value = '';
+      setDuration(Number(chip.dataset.min));
+    });
+  });
+  const applyCustom = () => {
+    const v = Number(durValue.value);
+    if (!v || v <= 0) return;
+    $$('#durChips .dur-chip').forEach((c) => c.classList.remove('sel'));
+    setDuration(v * Number(durUnit.value), true);
+  };
+  durValue.addEventListener('input', applyCustom);
+  durUnit.addEventListener('change', applyCustom);
+  setDuration(1440);
+
   typeSel.addEventListener('change', () => {
     customField.style.display = typeSel.value === 'अन्य' ? 'flex' : 'none';
     autoTitle();
@@ -1158,7 +1484,7 @@ async function renderCreate() {
     try {
       const res = await api('/api/elections', {
         method: 'POST',
-        body: { type, title, gram, district, state: st, candidates },
+        body: { type, title, gram, district, state: st, candidates, durationMin },
       });
       state.quota = res.quota;
       exploreCache = null;
@@ -1212,11 +1538,15 @@ function renderCreateSuccess(e, quota) {
 
         ${quota ? `<div style="margin-top:22px">${quotaBannerHTML(quota)}</div>` : ''}
 
-        <div class="status-banner info" style="margin-top:20px;text-align:left">
-          <div class="sb-ico">${ICON.info || ''}${ICON.shield}</div>
+        <div class="timer-banner" style="margin-top:20px">
+          <div class="tb-ico">${ICON.clock}</div>
           <div>
-            <h4>अपने चुनाव का नियंत्रण आपके पास है</h4>
-            <p>सेटिंग्स → “मेरे चुनाव” में जाकर आप कभी भी मतदान बंद करके विजेता की घोषणा कर सकते हैं (या दोबारा खोल सकते हैं)।</p>
+            <h4>यह चुनाव ${esc(fmtDuration(e.durationMin || 0))} चलेगा</h4>
+            <p class="tb-left" id="createCountdown" data-ends="${e.endsAt || 0}">${e.endsAt ? esc(fmtLeft(e.endsAt - Date.now())) : ''}</p>
+            <p class="muted" style="font-size:13px;margin-top:4px">
+              समाप्ति: <b>${e.endsAt ? esc(fullDate(e.endsAt)) : '—'}</b> ·
+              समय पूरा होते ही चुनाव अपने आप बंद हो जाएगा। 🔒 तब तक न बंद होगा, न हटेगा — लॉगआउट करने पर भी चलता रहेगा।
+            </p>
           </div>
         </div>
 
@@ -1228,6 +1558,16 @@ function renderCreateSuccess(e, quota) {
     </div>
   </section>`;
   bindCopyButtons();
+  const cd = document.getElementById('createCountdown');
+  if (cd && Number(cd.dataset.ends)) {
+    const tick = () => {
+      const left = Number(cd.dataset.ends) - Date.now();
+      cd.textContent = left > 0 ? fmtLeft(left) : 'समय पूरा — चुनाव बंद हो गया';
+      if (left <= 0) clearInterval(t);
+    };
+    tick();
+    var t = setInterval(tick, 1000);
+  }
   try { history.replaceState(null, '', '#/created/' + e.code); } catch (_) {}
   toast('चुनाव बन गया — लिंक शेयर करें!', 'ok');
 }
@@ -1251,8 +1591,11 @@ async function renderCreated(code) {
    ===================================================================== */
 
 let pollTimer = null;
+let countdownTimer = null;
+
 function clearPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   closeLive();
 }
 
@@ -1356,15 +1699,30 @@ function electionHTML(d) {
     ? '<span class="badge closed">चुनाव समाप्त</span>'
     : '<span class="badge live"><i></i> मतदान चल रहा है</span>';
 
+  const lock = electionLock(d);
+  const closedBtnLabel = d.closed
+    ? (lock.timeUp ? 'समय पूरा — दोबारा नहीं खुलेगा' : 'चुनाव फिर खोलें')
+    : 'चुनाव समाप्त करें';
+  const closeDisabled = lock.locked || (d.closed && lock.timeUp);
+  const deleteReady = d.canDelete != null ? d.canDelete : (d.closed || lock.timeUp);
   const adminBox = d.canManage ? `
     <div class="panel admin-box">
       <div class="admin-row">
         <div>
           <h4 style="display:flex;align-items:center;gap:7px">${ICON.key} आयोजक नियंत्रण</h4>
-          <p>${d.closed ? 'चुनाव बंद है — आप इसे दोबारा खोल सकते हैं।' : 'चुनाव बंद करते ही विजेता की घोषणा हो जाएगी और वोटिंग रुक जाएगी।'}</p>
+          ${d.endsAt ? `<p class="admin-timer-line">${ICON.clock} <b id="adminTimer" data-ends="${d.endsAt}">${esc(fmtLeft(lock.left))}</b> · कुल अवधि ${esc(fmtDuration(d.durationMin || 0))} · समाप्ति ${esc(fullDate(d.endsAt))}</p>` : ''}
+          <p>${lock.locked
+            ? '🔒 चुनाव चल रहा है। तय समय से पहले न बंद होगा, न हटेगा — समय पूरा होते ही अपने आप बंद हो जाएगा।'
+            : d.closed
+              ? (lock.timeUp ? 'समय पूरा — चुनाव अपने आप बंद हो गया। अब इसे हटाया जा सकता है।' : 'चुनाव बंद है — आप इसे दोबारा खोल सकते हैं।')
+              : 'चुनाव बंद करते ही विजेता की घोषणा हो जाएगी और वोटिंग रुक जाएगी।'}</p>
         </div>
-        <button class="btn ${d.closed ? 'btn-ghost' : 'btn-danger'}" id="toggleClose">${d.closed ? 'चुनाव फिर खोलें' : 'चुनाव समाप्त करें'}</button>
+        <div class="admin-btns">
+          <button class="btn ${d.closed ? 'btn-ghost' : 'btn-danger'}" id="toggleClose" ${closeDisabled ? 'disabled' : ''}>${closedBtnLabel}</button>
+          <button class="btn btn-ghost btn-sm" id="deleteElection" ${deleteReady ? '' : 'disabled'} title="${deleteReady ? 'चुनाव पूरी साइट से हटाएँ' : 'समय पूरा होने के बाद ही हटा सकते हैं'}">चुनाव हटाएँ</button>
+        </div>
       </div>
+      ${lock.locked ? `<p class="lock-hint">🔒 समय से पहले लॉक — तय समय: ${esc(fmtDuration(d.durationMin || 0))}। लॉगआउट करने पर भी यह चुनाव साइट पर चलता रहेगा।</p>` : ''}
     </div>` : '';
 
   return `
@@ -1382,6 +1740,8 @@ function electionHTML(d) {
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1116 0z"/><circle cx="12" cy="10" r="3"/></svg> ${esc(d.gram)} · ${esc(d.district)} · ${esc(d.state)}</span>
         <span>${ICON.ballot} <b id="headVotes">${fmt(d.totalVotes)}</b> वोट पड़े</span>
         <span>${ICON.clock} ${timeAgo(d.createdAt)}</span>
+        ${d.endsAt && !d.closed ? `<span class="ehead-timer">⏳ <b data-ends="${d.endsAt}">${esc(fmtLeft(d.endsAt - Date.now()))}</b></span>` : ''}
+        ${d.endsAt && d.closed ? `<span class="ehead-timer done">समाप्त ${esc(shortDate(d.endsAt))}</span>` : ''}
         <span class="code-pill">कोड: <b>${esc(d.code)}</b></span>
       </div>
       <div class="ehead-actions">
@@ -1581,6 +1941,64 @@ function bindElectionPage(d) {
       }
     });
   }
+
+  /* ---------- चुनाव हटाएँ (पूरी साइट से) ---------- */
+  const delBtn = document.getElementById('deleteElection');
+  if (delBtn) {
+    let armedDel = false;
+    let armDelTimer = null;
+    delBtn.addEventListener('click', async () => {
+      if (!armedDel) {
+        armedDel = true;
+        delBtn.classList.add('armed');
+        delBtn.textContent = 'पक्का? दोबारा दबाएँ';
+        clearTimeout(armDelTimer);
+        armDelTimer = setTimeout(() => {
+          armedDel = false;
+          delBtn.classList.remove('armed');
+          delBtn.textContent = 'चुनाव हटाएँ';
+        }, 5000);
+        return;
+      }
+      clearTimeout(armDelTimer);
+      delBtn.disabled = true;
+      delBtn.textContent = 'हट रहा है…';
+      try {
+        await api('/api/elections/' + encodeURIComponent(d.code) + '/delete', { method: 'POST' });
+        exploreCache = null;
+        toast('चुनाव साइट से हटा दिया गया।', 'ok');
+        location.hash = '#/settings/elections';
+      } catch (e) {
+        toast(e.message, 'err');
+        delBtn.disabled = false;
+        delBtn.textContent = 'चुनाव हटाएँ';
+        delBtn.classList.remove('armed');
+        armedDel = false;
+      }
+    });
+  }
+
+  /* ---------- बचा समय — सबके लिए हर सेकंड अपडेट ---------- */
+  const ends = d.endsAt ? Number(d.endsAt) : 0;
+  const timerEls = $$('[data-ends]').filter((el) => Number(el.dataset.ends) > 1000000000000);
+  if (ends && timerEls.length) {
+    let reloaded = false;
+    const tick = () => {
+      const left = ends - Date.now();
+      timerEls.forEach((el) => {
+        el.textContent = left > 0 ? fmtLeft(left) : 'समय पूरा';
+      });
+      if (left <= 0 && !reloaded) {
+        reloaded = true;
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        setTimeout(() => renderElection(d.code, { refresh: true }), 1400);
+      }
+    };
+    clearInterval(countdownTimer);
+    tick();
+    countdownTimer = setInterval(tick, 1000);
+  }
 }
 
 /* =====================================================================
@@ -1631,6 +2049,8 @@ function renderLogin() {
           <div>${ICON.shield}<span><b>नाम से लॉगिन:</b> जो नाम आपने डाला, आगे भी वही डालें — तभी आपका खाता वही रहेगा।</span></div>
           <div>${ICON.ballot}<span><b>एक डिवाइस, एक वोट:</b> हर चुनाव में आपका एक ही वोट गिना जाएगा।</span></div>
           <div>${ICON.clock}<span><b>रोज़ 2 चुनाव:</b> हर उपयोगकर्ता 1 दिन में अधिकतम 2 चुनाव बना सकता है।</span></div>
+          <div>${ICON.lock || ICON.shield}<span><b>एक मोबाइल = एक नाम:</b> जिस मोबाइल से पहली बार जिस नाम से लॉगिन हुआ, उसी मोबाइल से आगे वही नाम चलेगा।</span></div>
+          <div>${ICON.star || ICON.ballot}<span><b>लॉगिन कार्ड:</b> लॉगिन करते ही आपके नाम वाली एक इमेज डाउनलोड होगी — उसे सँभाल कर रखें।</span></div>
         </div>
         <p class="login-note">आगे बढ़ने पर आप <a href="#/disclaimer">डिस्क्लेमर व नियम</a> स्वीकार करते हैं।</p>
       </div>
@@ -1762,6 +2182,8 @@ async function renderSettings(tab) {
   if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
   const logoutBtn2 = document.getElementById('logoutBtn2');
   if (logoutBtn2) logoutBtn2.addEventListener('click', logoutUser);
+  const redl = document.getElementById('redownloadCard');
+  if (redl) redl.addEventListener('click', () => openLoginCard(state.user && state.user.name, { first: false }));
 
   bindCopyButtons();
 
@@ -1804,6 +2226,37 @@ async function renderSettings(tab) {
   }
 
   if (tab === 'elections') {
+    $$('[data-count-to]').forEach((el) => {
+      const ends = Number(el.dataset.countTo);
+      el.textContent = fmtLeft(ends - Date.now());
+    });
+    $$('[data-delete]').forEach((btn) => {
+      let armed = false;
+      let armT = null;
+      btn.addEventListener('click', async () => {
+        const code = btn.dataset.delete;
+        if (!armed) {
+          armed = true;
+          btn.textContent = 'पक्का? दोबारा दबाएँ';
+          armT = setTimeout(() => { armed = false; btn.textContent = 'हटाएँ'; }, 5000);
+          return;
+        }
+        clearTimeout(armT);
+        btn.disabled = true;
+        btn.textContent = 'हट रहा है…';
+        try {
+          await api('/api/elections/' + encodeURIComponent(code) + '/delete', { method: 'POST' });
+          exploreCache = null;
+          toast('चुनाव हटा दिया गया।', 'ok');
+          renderSettings('elections');
+        } catch (e) {
+          toast(e.message, 'err');
+          btn.disabled = false;
+          btn.textContent = 'हटाएँ';
+          armed = false;
+        }
+      });
+    });
     $$('[data-manage]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const code = btn.dataset.manage;
@@ -1865,6 +2318,7 @@ function settingsAccountHTML() {
       <li><b>सदस्यता</b><span>${esc(fullDate(state.user.createdAt))}</span></li>
     </ul>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn btn-primary" id="redownloadCard">🎴 मेरा लॉगिन कार्ड फिर डाउनलोड करें</button>
       <button class="btn btn-ghost" id="logoutBtn2">लॉगआउट करें</button>
       <a class="btn btn-ghost" href="#/privacy">गोपनीयता नीति</a>
       <a class="btn btn-ghost" href="#/terms">नियम व शर्तें</a>
@@ -1940,11 +2394,14 @@ function settingsElectionsHTML(data) {
           <h3>${esc(e.title)}</h3>
           <p class="muted small">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)} · ${esc(timeAgo(e.createdAt))}</p>
           <p class="my-leading">${lead && lead.votes ? `आगे: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'अभी कोई वोट नहीं पड़ा'}</p>
+          ${e.endsAt ? `<p class="my-timer">${ICON.clock} ${e.closed ? 'समाप्त: ' + esc(fullDate(e.endsAt)) : '<b data-count-to="' + e.endsAt + '">' + esc(fmtLeft(e.endsAt - Date.now())) + '</b> · समाप्ति ' + esc(fullDate(e.endsAt))}</p>` : ''}
         </div>
         <div class="my-item-actions">
           <div class="my-votes"><b>${fmt(e.totalVotes)}</b><span>वोट</span></div>
           <a class="btn btn-ghost btn-sm" href="#/e/${e.code}">देखें</a>
-          <button class="btn ${e.closed ? 'btn-ghost' : 'btn-danger'} btn-sm" data-manage="${e.code}" data-action="${e.closed ? 'reopen' : 'close'}">${e.closed ? 'फिर खोलें' : 'समाप्त करें'}</button>
+          <button class="btn ${e.closed ? 'btn-ghost' : 'btn-danger'} btn-sm" data-manage="${e.code}" data-action="${e.closed ? 'reopen' : 'close'}"
+            ${(!e.closed && !e.canDelete) || (e.closed && e.timeUp) ? 'disabled title="' + (e.timeUp ? 'समय पूरा — दोबारा नहीं खुलेगा' : 'तय समय से पहले बंद नहीं कर सकते') + '"' : ''}>${e.closed ? (e.timeUp ? 'समाप्त' : 'फिर खोलें') : 'समाप्त करें'}</button>
+          <button class="btn btn-ghost btn-sm" data-delete="${e.code}" ${e.canDelete ? '' : 'disabled title="समय पूरा होने के बाद ही हटा सकते हैं"'}>हटाएँ</button>
         </div>
       </div>`;
     }).join('')}
@@ -2573,6 +3030,9 @@ function renderHow() {
           <div><h4>एक व्यक्ति कितनी बार वोट कर सकता है?</h4><p>हर चुनाव में आपका सिर्फ़ <b>एक वोट</b> गिना जाता है — आपके खाते से एक, और आपके डिवाइस से भी एक। दूसरे नाम से भी उसी डिवाइस से दोबारा वोट नहीं हो सकता।</p></div>
           <div><h4>एक दिन में कितने चुनाव बना सकते हैं?</h4><p>हर उपयोगकर्ता 1 दिन (IST) में अधिकतम <b>2 चुनाव</b> बना सकता है। सीमा आधी रात (IST) पर रीसेट होती है।</p></div>
           <div><h4>किसने किसको वोट दिया, कौन देख सकता है?</h4><p>सिर्फ़ <b>डेवलपर</b> (पासवर्ड से)। चुनाव बनाने वाला भी नहीं देख सकता कि किसने किसको वोट दिया — उसे भी सिर्फ़ गिनती दिखती है। सार्वजनिक रूप से सबको सिर्फ़ परिणाम दिखता है।</p></div>
+          <div><h4>चुनाव का समय (टाइमर) कैसे तय होता है?</h4><p>चुनाव बनाते समय आप खुद समय चुनते हैं — 1 मिनट, 2 मिनट, 1 घंटा, 2 घंटे, 24 घंटे, या अपनी कोई भी संख्या (50, 100…). समय पूरा होते ही चुनाव <b>अपने आप बंद</b> हो जाता है और परिणाम घोषित हो जाता है।</p></div>
+          <div><h4>क्या मैं चुनाव बीच में बंद या हटा सकता हूँ?</h4><p>नहीं। टाइमर चालू होने के बाद चुनाव <b>लॉक</b> रहता है — न जल्दी बंद होगा, न हटेगा। समय पूरा होने के बाद आप उसे हटा (डिलीट) सकते हैं। अगर आप लॉगआउट भी कर दें, चुनाव साइट पर चलता रहेगा और तय समय पर खुद बंद होगा।</p></div>
+          <div><h4>लॉगिन कार्ड क्या है?</h4><p>नाम लिखकर लॉगिन करते ही आपके नाम वाली एक सुंदर इमेज डाउनलोड होती है। उस पर लिखा रहता है — “इसे अच्छे से सँभाल कर रखें, इसी से आप लॉगिन कर पाएंगे”, और नीचे दोनों पते (GitHub Pages व Render) वॉटरमार्क की तरह रहते हैं।</p></div>
           <div><h4>क्या परिणाम स्थायी रहते हैं?</h4><p>हाँ। वोट और परिणाम सर्वर पर सेव होते हैं। Upstash Redis जोड़ने पर डेटा होस्टिंग रीस्टार्ट होने पर भी सुरक्षित रहता है।</p></div>
           <div><h4>क्या यह सरकारी चुनाव के लिए है?</h4><p>नहीं। यह गैर-सरकारी, सामुदायिक मतदान मंच है। <a href="#/disclaimer">डिस्क्लेमर</a> ज़रूर पढ़ें।</p></div>
         </div>

@@ -1326,3 +1326,197 @@ select {
 :root[data-theme="dark"] .hstep { border-bottom-color: #2a3055; }
 :root[data-theme="dark"] .hstep b { color: var(--ink); }
 :root[data-theme="dark"] .ballot-live.off { background: #221f4e; color: #b9b1ff; }
+
+/* =====================================================================
+   v6 — टाइमर, लॉक, डिलीट और लॉगिन कार्ड
+   ===================================================================== */
+
+.dur-chips { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 14px; }
+.dur-chip {
+  border: 1.5px solid var(--line, #e5e3f1);
+  background: var(--surface, #fff);
+  color: inherit;
+  border-radius: 999px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .12s ease, background .15s ease, border-color .15s ease;
+}
+.dur-chip:hover { border-color: #8b7bff; transform: translateY(-1px); }
+.dur-chip.sel {
+  background: linear-gradient(135deg, #5b3df5, #7b5cff);
+  border-color: #5b3df5;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(91, 61, 245, .28);
+}
+
+.dur-custom {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(91, 61, 245, .05);
+  border: 1px dashed rgba(91, 61, 245, .3);
+}
+.dur-custom label { font-size: 13.5px; font-weight: 600; color: var(--muted, #6b6880); }
+.dur-custom input {
+  width: 130px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line, #e5e3f1);
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+.dur-custom select {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line, #e5e3f1);
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+
+.lock-note {
+  margin-top: 12px;
+  font-size: 13.2px;
+  line-height: 1.6;
+  color: #8a5a00;
+  background: rgba(255, 176, 32, .12);
+  border: 1px solid rgba(255, 176, 32, .35);
+  border-radius: 12px;
+  padding: 11px 14px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.lock-note svg { flex: 0 0 auto; margin-top: 2px; }
+
+/* ------------- चुनाव बनने के बाद वाला टाइमर बॉक्स ------------- */
+.timer-banner {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(91, 61, 245, .1), rgba(255, 145, 60, .12));
+  border: 1px solid rgba(91, 61, 245, .22);
+}
+.timer-banner .tb-ico {
+  width: 40px; height: 40px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: 12px;
+  background: #5b3df5; color: #fff;
+}
+.timer-banner h4 { margin: 0 0 4px; font-size: 16px; letter-spacing: -.01em; }
+.timer-banner .tb-left {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  color: #4626d2;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------- आयोजक नियंत्रण में टाइमर ------------- */
+.admin-timer-line {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 14px; margin: 2px 0 6px;
+  color: #4626d2; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.admin-btns { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+.admin-btns .btn[disabled] { opacity: .5; cursor: not-allowed; }
+.admin-btns .btn.armed { background: #c62828; color: #fff; border-color: #c62828; }
+.lock-hint {
+  margin-top: 12px; font-size: 13px; line-height: 1.55;
+  color: #8a5a00;
+  background: rgba(255, 176, 32, .12);
+  border: 1px solid rgba(255, 176, 32, .35);
+  border-radius: 11px;
+  padding: 10px 13px;
+}
+.my-timer { font-size: 12.8px; color: #5b4bb8; margin-top: 6px; display: flex; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
+
+/* ------------- लॉगिन कार्ड मोडल ------------- */
+.lc-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(10, 6, 32, .72);
+  backdrop-filter: blur(4px);
+  display: grid; place-items: center;
+  padding: 16px;
+  overflow: auto;
+  animation: lcIn .18s ease-out;
+}
+@keyframes lcIn { from { opacity: 0 } to { opacity: 1 } }
+.lc-modal {
+  position: relative;
+  width: min(430px, 100%);
+  max-height: 94vh;
+  overflow: auto;
+  background: var(--surface, #fff);
+  color: inherit;
+  border-radius: 20px;
+  padding: 20px 18px 16px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .45);
+  text-align: center;
+}
+.lc-modal h3 { margin: 0 0 4px; font-size: 19px; letter-spacing: -.02em; }
+.lc-sub { margin: 0 0 14px; font-size: 13px; color: var(--muted, #6b6880); }
+.lc-modal img {
+  width: 100%; height: auto; border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(23, 12, 70, .25);
+  display: block;
+}
+.lc-note {
+  margin: 13px 0 0; font-size: 13.2px; line-height: 1.55;
+  background: rgba(255, 176, 32, .14);
+  border: 1px solid rgba(255, 176, 32, .4);
+  border-radius: 12px; padding: 10px 12px;
+  color: #8a5a00; text-align: left;
+}
+.lc-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 14px; }
+.lc-actions .btn { width: 100%; justify-content: center; }
+.lc-urls {
+  margin: 12px 0 0; font-size: 11.5px; line-height: 1.5;
+  color: var(--muted, #6b6880); word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.lc-x {
+  position: absolute; top: 10px; right: 12px;
+  border: 0; background: transparent; color: inherit;
+  font-size: 17px; cursor: pointer; opacity: .55; padding: 6px;
+}
+.lc-x:hover { opacity: 1; }
+
+@media (max-width: 560px) {
+  .dur-chip { padding: 8px 13px; font-size: 13.2px; }
+  .dur-custom input { width: 100px; }
+  .timer-banner .tb-left { font-size: 18px; }
+  .admin-btns { width: 100%; }
+  .admin-btns .btn { flex: 1 1 auto; }
+}
+.ehead-timer {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(255,255,255,.16);
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.ehead-timer.done { background: rgba(255,255,255,.1); font-weight: 600; opacity: .85; }
+.ecard-timer {
+  margin-top: 9px;
+  font-size: 12.6px;
+  font-weight: 600;
+  color: #5b4bb8;
+  font-variant-numeric: tabular-nums;
+}

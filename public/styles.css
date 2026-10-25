@@ -1535,3 +1535,89 @@ select {
   cursor: pointer;
 }
 .offline-bar .offline-retry:hover { background: #fff7e6; }
+
+/* =====================================================================
+   🟢 बिना लॉगिन वोट (शेयर लिंक से आने वाले मतदाता के लिए)
+   ===================================================================== */
+.guest-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #eefbf3;
+  border: 1.5px solid #bfe9d0;
+  border-left: 5px solid var(--green, #16a34a);
+  border-radius: 14px;
+  padding: 13px 15px;
+  margin-bottom: 14px;
+  animation: popIn .25s ease;
+}
+.guest-note b { color: #0f5132; font-size: 15px; line-height: 1.5; }
+.guest-note span { color: #2f6b48; font-size: 13.5px; line-height: 1.6; }
+.muted.small { font-size: 13px; margin-top: 6px; }
+@media (max-width: 420px) {
+  .guest-note { padding: 11px 12px; border-radius: 12px; }
+  .guest-note b { font-size: 14px; }
+  .guest-note span { font-size: 12.5px; }
+}
+
+/* =====================================================================
+   🟢 डेवलपर → चालू चुनाव (हर चुनाव का अलग कार्ड) + एक चुनाव का पूरा पेज
+   ===================================================================== */
+.dev-ecards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.dev-ecard {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: #fff; border: 1.5px solid var(--line); border-radius: 16px;
+  padding: 15px 16px; box-shadow: var(--shadow-sm); transition: .16s;
+  font-family: inherit; color: var(--ink);
+}
+.dev-ecard:hover { border-color: var(--indigo); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.dev-ecard-top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }
+.dev-ecard-left { margin-left: auto; font-size: 12.5px; color: var(--muted); font-weight: 700; }
+.dev-ecard-left b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.dev-ecard h4 { font-size: 16px; letter-spacing: -.015em; margin-bottom: 3px; }
+.dev-ecard-place { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+.dev-ecard-nums { display: flex; gap: 8px; margin-bottom: 11px; }
+.dev-ecard-nums > div { flex: 1; background: var(--bg, #f6f6fb); border-radius: 11px; padding: 8px 6px; text-align: center; }
+.dev-ecard-nums b { display: block; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.dev-ecard-nums span { font-size: 11px; color: var(--muted); font-weight: 700; }
+.dev-ecard-lead { font-size: 13px; color: var(--muted); margin-bottom: 11px; min-height: 18px; }
+.dev-ecard-lead b { color: var(--ink); }
+.dev-ecard-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed var(--line); }
+.dev-ecard-cta { margin-left: auto; font-size: 12.8px; font-weight: 800; color: var(--indigo); }
+
+.back-link { display: inline-block; margin-bottom: 14px; font-size: 14px; font-weight: 700; }
+.dev-one-head { display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; margin-bottom: 18px; }
+.dev-one-head h1 { font-size: 25px; letter-spacing: -.03em; margin: 8px 0 5px; }
+.dev-one-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dev-one-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.dev-one-stats { margin-top: 4px; }
+.dev-one-stats .dev-stat b { font-size: 22px; }
+
+@media (max-width: 560px) {
+  .dev-ecards { grid-template-columns: 1fr; }
+  .dev-one-head h1 { font-size: 21px; }
+  .dev-one-stats { grid-template-columns: repeat(2, 1fr) !important; }
+}
+:root[data-theme="dark"] .dev-ecard { background: #161a33; border-color: #2a3057; color: #e8e9f5; }
+:root[data-theme="dark"] .dev-ecard-nums > div { background: #1d2340; }
+
+/* डेवलपर: एक चुनाव वाले पेज के ऊपरी (गहरे) हिस्से में साफ़ पढ़ाई */
+.dev-page .back-link { color: #ffd08a; }
+.dev-one-head h1 { color: #fff; }
+.dev-one-head .muted { color: rgba(255,255,255,.72); }
+.dev-one-head .muted b { color: #fff; }
+.dev-one-head .creator-tag { background: rgba(255,255,255,.16); color: #fff; }
+.dev-one-head .code-chip { background: rgba(255,255,255,.16); color: #fff; }
+.dev-one-head .mini-badge { background: rgba(255,255,255,.16); color: #fff; }
+.dev-page .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+:root[data-theme="dark"] .dev-one-head h1 { color: #fff; }
+
+/* डेवलपर: वोट सूची (मोबाइल पर भी पूरी दिखे — तीन कॉलम में नहीं कटेगी) */
+.dev-vote-list { display: flex; flex-direction: column; gap: 10px; }
+.dev-vote-item { border: 1px solid var(--line); border-radius: 13px; padding: 11px 13px; background: var(--bg, #fafaff); }
+.dvv-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.dvv-top b { font-size: 14.5px; }
+.dvv-mid { display: flex; align-items: center; gap: 7px; margin: 5px 0 3px; font-size: 13.6px; color: var(--muted); }
+.dvv-mid b { color: var(--ink); }
+.dvv-dev { font-size: 12px; }
+:root[data-theme="dark"] .dev-vote-item { background: #1a1f3a; border-color: #2a3057; }

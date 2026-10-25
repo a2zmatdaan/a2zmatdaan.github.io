@@ -180,6 +180,21 @@
 
   function ensure() {
     if (probe) return probe;
+
+    /* 🟢 असली सर्वर सेट है (जैसे GitHub Pages + Render) — तो "डेमो/प्रीव्यू" मोड
+       कभी नहीं। पहले यहाँ गड़बड़ी थी: Render का सर्वर 15 मिनट बाद सो जाता है,
+       पहला health चेक फेल होता था और साइट ऊपर नीला "डेमो प्रीव्यू" बैनर दिखाने
+       लगती थी (जबकि डेटा असली सर्वर से ही आ रहा होता था)। अब सीधे मान लेते हैं
+       कि सर्वर है; पीछे-पीछे एक health कॉल भेजकर उसे जगा भी देते हैं। */
+    if (apiBase()) {
+      window.JANMAT_OFFLINE = false;
+      probe = Promise.resolve(true);
+      try {
+        fetch(apiBase() + '/api/health', { method: 'GET', cache: 'no-store' }).catch(function () {});
+      } catch (_) {}
+      return probe;
+    }
+
     if (location.protocol === 'file:' && !apiBase()) {
       window.JANMAT_OFFLINE = true;
       probe = Promise.resolve(false);

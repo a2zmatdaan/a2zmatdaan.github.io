@@ -87,10 +87,19 @@ CODE2=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/elections/$COD
   -H 'content-type: application/json' "${AUTH[@]}" -d "{\"candidateId\":\"$CAND\"}")
 [ "$CODE2" = "409" ] && ok "दोबारा वोट रुका (409)" || bad "दोबारा वोट रुका नहीं (मिला $CODE2)"
 
+# --- bina login vote (share link se aaya matadar) ---------------------------
+GDEV="testdevice$RANDOM$RANDOM"
+GV=$(curl -s -o /tmp/gv.json -w '%{http_code}' -X POST "$BASE/api/elections/$CODE/vote" \
+  -H 'content-type: application/json' -H "x-device-id: $GDEV" -d "{\"candidateId\":\"$CAND\"}")
+[ "$GV" = "200" ] && ok "बिना लॉगिन वोट चला (200)" || bad "बिना लॉगिन वोट नहीं चला (मिला $GV)"
+GV2=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/elections/$CODE/vote" \
+  -H 'content-type: application/json' -H "x-device-id: $GDEV" -d "{\"candidateId\":\"$CAND\"}")
+[ "$GV2" = "409" ] && ok "उसी डिवाइस का दूसरा वोट रुका (409)" || bad "डिवाइस दोबारा वोट कर गया (मिला $GV2)"
+
 # --- public page par pehchan chhupi rahe ------------------------------------
 PUB=$(curl -fsS "$BASE/api/elections/$CODE")
 if printf '%s' "$PUB" | grep -q "CI जाँच"; then bad "सार्वजनिक API में वोटर का नाम लीक"; else ok "सार्वजनिक API में पहचान नहीं"; fi
-[ "$(printf '%s' "$PUB" | json_get totalVotes)" = "1" ] && ok "गिनती दिख रही (1)" || bad "गिनती ग़लत"
+[ "$(printf '%s' "$PUB" | json_get totalVotes)" = "2" ] && ok "गिनती दिख रही (2)" || bad "गिनती ग़लत"
 
 # --- developer panel --------------------------------------------------------
 DEV=$(curl -fsS -X POST "$BASE/api/dev/login" -H 'content-type: application/json' -d "{\"password\":\"$PASS\"}")
@@ -110,7 +119,7 @@ DEL=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/account/delete" 
   -H 'content-type: application/json' "${AUTH[@]}" -d '{"confirm":true}')
 [ "$DEL" = "200" ] && ok "खाता हटा" || bad "खाता नहीं हटा ($DEL)"
 PUB2=$(curl -fsS "$BASE/api/elections/$CODE")
-[ "$(printf '%s' "$PUB2" | json_get totalVotes)" = "1" ] && ok "खाता हटने के बाद भी वोट की गिनती बची" || bad "गिनती बदल गई"
+[ "$(printf '%s' "$PUB2" | json_get totalVotes)" = "2" ] && ok "खाता हटने के बाद भी वोट की गिनती बची" || bad "गिनती बदल गई"
 
 # --- result -----------------------------------------------------------------
 say ""

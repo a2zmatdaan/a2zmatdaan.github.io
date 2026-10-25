@@ -66,6 +66,15 @@ async function initDeviceId() {
   if (DEVICE_ID) return DEVICE_ID;
   let saved = store.get('jm_device');
   if (saved) { DEVICE_ID = saved; return DEVICE_ID; }
+
+  /* 🟢 हर फ़ोन/ब्राउज़र की अपनी अलग पहचान — random id, localStorage में सुरक्षित।
+     (पहले फिंगरप्रिंट से बनाते थे — एक ही मॉडल के दो फ़ोन का फिंगरप्रिंट एक जैसा
+     निकलता था, जिससे दूसरे असली मतदाता का वोट रुक जाता था।) */
+  const fresh = 'dev_' + genId().replace(/-/g, '') + Math.random().toString(16).slice(2, 10);
+  store.set('jm_device', fresh);
+  if (store.get('jm_device') === fresh) { DEVICE_ID = fresh; return DEVICE_ID; }
+
+  /* localStorage बंद है (कुछ प्राइवेट मोड) → फिंगरप्रिंट से काम चलाओ */
   const bits = [
     navigator.userAgent, navigator.language, navigator.languages ? navigator.languages.join(',') : '',
     screen.width + 'x' + screen.height + 'x' + (screen.colorDepth || 0),
@@ -153,7 +162,13 @@ const state = {
 
 /* Server ka base URL (khali = isi domain par API).
    GitHub Pages (static) + Render (server) combo ke liye template.html me set hota hai. */
-const API_BASE = String(window.JANMAT_API_BASE || '').replace(/\/+$/, '');
+/* 🟢 सुरक्षा-कवच: अगर किसी वजह से config.js खाली/ग़ायब हो और साइट GitHub Pages
+   पर चल रही हो, तो भी असली सर्वर (Render) ही इस्तेमाल होगा — डेमो प्रीव्यू कभी
+   नहीं खुलेगा। (यही वजह थी कि लाइव साइट पर "डेमो प्रीव्यू" बैनर दिख रहा था।) */
+const FALLBACK_SERVER = 'https://a2zmatdaan-github-io.onrender.com';
+let API_BASE = String(window.JANMAT_API_BASE || '').replace(/\/+$/, '');
+if (!API_BASE && /(^|\.)github\.io$/i.test(location.hostname)) API_BASE = FALLBACK_SERVER;
+if (API_BASE) window.JANMAT_API_BASE = API_BASE;
 function apiUrl(path) { return API_BASE + path; }
 
 async function api(path, opts = {}) {
@@ -638,6 +653,12 @@ async function loginWithName(name) {
   state.quota = res.quota;
   store.set('jm_token', res.token);
   renderNavAuth();
+  /* 🟢 इस फ़ोन से पहले बिना लॉगिन जो वोट पड़े थे, वे अब इस नाम से जुड़ गए */
+  if (res.adoptedVotes) {
+    setTimeout(() => {
+      toast(res.adoptedVotes + ' पहले वाला वोट अब आपके नाम (' + res.user.name + ') से जुड़ गया', 'ok');
+    }, 1100);
+  }
   /* 🎴 नाम वाली लॉगिन इमेज — सँभाल कर रखने के लिए (अपने आप डाउनलोड) */
   try { openLoginCard(res.user.name, { first: true }); } catch (_) {}
   return res;
@@ -1732,9 +1753,12 @@ function voteAreaHTML(d) {
     return `<div class="status-banner warn"><div class="sb-ico">${ICON.lock}</div>
       <div><h4>यह चुनाव समाप्त हो चुका है</h4><p>अब नए वोट दर्ज नहीं हो सकते। नीचे अंतिम परिणाम देखिए।</p></div></div>`;
   }
-  if (!state.user) {
-    return loginCardHTML({ title: 'वोट देने के लिए लॉगिन करें', sub: 'सिर्फ़ अपना नाम लिखिए — कोई पासवर्ड या OTP नहीं।' });
-  }
+  /* 🟢 शेयर किए लिंक से आया मतदाता — लॉगिन के बिना सीधे वोट */
+  const guestNote = state.user ? '' : `
+    <div class="guest-note">
+      <b>सीधे वोट कीजिए — किसी लॉगिन की ज़रूरत नहीं।</b>
+      <span>बस अपना उम्मीदवार चुनिए और "वोट दर्ज करें" दबाइए। एक फ़ोन से एक ही वोट गिना जाएगा।</span>
+    </div>`;
   if (d.hasVoted) {
     const my = d.candidates.find((c) => c.id === d.myVote);
     return `<div class="status-banner ok">
@@ -1742,9 +1766,11 @@ function voteAreaHTML(d) {
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
       </div></div>
       <div><h4>आपका वोट दर्ज हो चुका है</h4>
-      <p>${my ? `आपने <b>${esc(my.name)}</b> को वोट दिया।` : 'इस चुनाव में आपका वोट दर्ज है।'} धन्यवाद!</p></div></div>`;
+      <p>${my ? `आपने <b>${esc(my.name)}</b> को वोट दिया।` : 'इस चुनाव में आपका वोट दर्ज है।'} धन्यवाद!</p>
+      ${state.user ? '' : '<p class="muted small">चाहें तो <a href="#/login">नाम से लॉगिन</a> कर लें — इससे आपका रिकॉर्ड सुरक्षित रहेगा।</p>'}</div></div>`;
   }
   return `
+    ${guestNote}
     <div class="vote-grid" id="voteGrid">
       ${d.candidates.map((c) => `
         <button type="button" class="vcard" data-id="${c.id}">
@@ -1760,15 +1786,16 @@ function voteAreaHTML(d) {
       <div class="sel-info" id="selInfo">अपना उम्मीदवार चुनिए</div>
       <button class="btn btn-primary btn-lg" id="voteBtn" disabled>वोट दर्ज करें</button>
     </div>
-    <p class="vote-hint">${ICON.shield} आपका नाम और वोट किसी को नहीं दिखता — सिर्फ़ आप और डेवलपर देख सकते हैं। एक डिवाइस से एक ही वोट।</p>`;
+    <p class="vote-hint">${ICON.shield} ${state.user ? 'आपका नाम और वोट किसी को नहीं दिखता — सिर्फ़ आप और डेवलपर देख सकते हैं।' : 'आपका नाम नहीं पूछा जाता — वोट गुप्त रहता है।'} एक डिवाइस से एक ही वोट।</p>`;
 }
 
 function electionHTML(d) {
   const link = shareUrl(d.code);
-  const waText = encodeURIComponent(`🗳️ *${d.title}*\n📍 ${d.gram}, ${d.district}, ${d.state}\n\nअपना वोट डालें: ${link}`);
+  const waText = encodeURIComponent(`🗳️ *${d.title}*\n📍 ${d.gram}, ${d.district}, ${d.state}\n\nसीधे वोट कीजिए (किसी लॉगिन की ज़रूरत नहीं) 👇\n${link}`);
   const statusBadge = d.closed
     ? '<span class="badge closed">चुनाव समाप्त</span>'
     : '<span class="badge live"><i></i> मतदान चल रहा है</span>';
+
 
   const lock = electionLock(d);
   const closedBtnLabel = d.closed
@@ -2120,7 +2147,7 @@ function renderLogin() {
       <div class="panel login-card big">
         <div class="login-card-ico">${ICON.user}</div>
         <h3>नाम से लॉगिन</h3>
-        <p class="muted">यही नाम आपकी पहचान है — चुनाव बनाने और वोट देने दोनों में।</p>
+        <p class="muted">यही नाम आपकी पहचान है — इससे आप चुनाव बना सकते हैं। <b>वोट देने के लिए लॉगिन ज़रूरी नहीं</b> — शेयर किया लिंक खोलकर सीधे वोट कीजिए।</p>
         <form id="loginForm" autocomplete="off">
           <input id="loginName" type="text" placeholder="आपका नाम (जैसे: रवि शर्मा)" maxlength="30" aria-label="आपका नाम" />
           <button class="btn btn-primary btn-lg" type="submit" id="loginBtn">लॉगिन करें</button>
@@ -2521,7 +2548,7 @@ function settingsVotesHTML(data) {
    ===================================================================== */
 
 let devData = null;
-let devTab = 'summary';
+let devTab = 'active';
 
 async function renderDeveloper() {
   setActiveNav('');
@@ -2561,10 +2588,11 @@ async function renderDeveloper() {
       <div class="dev-stats" id="devStats">${devStatsHTML()}</div>
 
       <div class="tabs dark">
-        <button class="tab ${devTab === 'summary' ? 'active' : ''}" data-devt="summary">सारांश</button>
+        <button class="tab ${devTab === 'active' ? 'active' : ''}" data-devt="active">चालू चुनाव (${devData.elections.filter((e) => !e.closed).length})</button>
+        <button class="tab ${devTab === 'elections' ? 'active' : ''}" data-devt="elections">सभी चुनाव (${devData.elections.length})</button>
+        <button class="tab ${devTab === 'votes' ? 'active' : ''}" data-devt="votes">सभी वोट (${devData.votes.length})</button>
         <button class="tab ${devTab === 'users' ? 'active' : ''}" data-devt="users">यूज़र्स (${devData.users.length})</button>
-        <button class="tab ${devTab === 'elections' ? 'active' : ''}" data-devt="elections">चुनाव (${devData.elections.length})</button>
-        <button class="tab ${devTab === 'votes' ? 'active' : ''}" data-devt="votes">वोट विवरण (${devData.votes.length})</button>
+        <button class="tab ${devTab === 'summary' ? 'active' : ''}" data-devt="summary">सारांश</button>
       </div>
 
       <div class="dev-live-card" id="devLiveCard">
@@ -2708,8 +2736,283 @@ function startDevLive() {
   };
 }
 
+
+/* =====================================================================
+   🟢 चालू चुनाव — हर चुनाव का अपना अलग कार्ड
+   डेवलपर किसी भी कार्ड पर दबाकर सिर्फ़ उसी चुनाव का विवरण देखता है
+   (किसने किसको वोट दिया) — सबका मिला-जुला नहीं।
+   ===================================================================== */
+function devActiveHTML() {
+  const all = (devData.elections || []).filter((e) => !e.closed);
+  /* सबसे सक्रिय (ज़्यादा वोट वाला) सबसे ऊपर, फिर नया */
+  const active = [...all].sort((a, b) => (b.totalVotes - a.totalVotes) || (b.createdAt - a.createdAt));
+
+  const head = `
+    <div class="dev-card">
+      <div class="dev-card-head">
+        <h3>चालू चुनाव (${active.length})</h3>
+        <div class="dev-tools">
+          <input type="search" id="devActiveSearch" placeholder="गाँव / कोड / बनाने वाला…" />
+        </div>
+      </div>
+      <p class="dev-note" style="margin:0 0 14px">
+        किसी भी चुनाव के कार्ड पर दबाइए — सिर्फ़ उसी चुनाव का पूरा विवरण खुलेगा
+        (किसने किसको वोट दिया, कब, कौन-सा डिवाइस)। सबका मिला-जुला नहीं।
+      </p>`;
+
+  if (!active.length) {
+    return head + `
+      <div class="empty" style="padding:34px 18px">
+        <div class="em-ico">${ICON.ballot}</div>
+        <h3>अभी कोई चुनाव नहीं चल रहा</h3>
+        <p>जैसे ही कोई चुनाव बनेगा, वह यहाँ अपने अलग कार्ड में दिखेगा।</p>
+      </div>
+    </div>`;
+  }
+
+  return head + `
+    <div class="dev-ecards" id="devActiveList">
+      ${active.map((e) => {
+        const left = e.remainingMs > 0 ? fmtLeft(e.remainingMs) : '';
+        return `
+      <button class="dev-ecard" data-e-open="${esc(e.code)}" data-name="${esc((e.title + ' ' + e.code + ' ' + e.gram + ' ' + e.creatorName).toLowerCase())}">
+        <div class="dev-ecard-top">
+          <span class="badge live"><i></i> चालू</span>
+          ${left ? `<span class="dev-ecard-left">⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b> बाकी</span>` : ''}
+        </div>
+        <h4>${esc(e.title)}</h4>
+        <div class="dev-ecard-place">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}</div>
+        <div class="dev-ecard-nums">
+          <div><b>${fmt(e.totalVotes)}</b><span>वोट</span></div>
+          <div><b>${e.candidateCount}</b><span>उम्मीदवार</span></div>
+          <div><b>${e.deviceCount}</b><span>डिवाइस</span></div>
+        </div>
+        <div class="dev-ecard-lead">
+          ${e.leading && e.leading.votes
+            ? `आगे: <b>${esc(e.leading.name)}</b> · ${fmt(e.leading.votes)} वोट (${e.leading.percent}%)`
+            : '<span class="muted">अभी कोई वोट नहीं पड़ा</span>'}
+        </div>
+        <div class="dev-ecard-foot">
+          <span class="code-chip">${esc(e.code)}</span>
+          <span class="creator-tag">${esc(e.creatorName)}</span>
+          <span class="dev-ecard-cta">पूरा विवरण देखें →</span>
+        </div>
+      </button>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+/* ---------- एक चुनाव का पूरा पेज (सिर्फ़ उसी का डेटा) ---------- */
+let devDetailTimer = null;
+
+async function renderDevElection(code) {
+  setActiveNav('');
+  clearPoll();
+  if (devDetailTimer) { clearInterval(devDetailTimer); devDetailTimer = null; }
+  if (!state.devToken) return renderDevLogin();
+
+  app.innerHTML = `<section class="section"><div class="wrap">
+    <div class="skeleton" style="height:22px;width:40%"></div>
+    <div class="skeleton" style="height:120px;border-radius:18px;margin-top:18px"></div>
+    <div class="skeleton" style="height:220px;border-radius:18px;margin-top:14px"></div>
+  </div></section>`;
+
+  let d;
+  try {
+    d = await api('/api/dev/elections/' + encodeURIComponent(code));
+  } catch (e) {
+    app.innerHTML = `<section class="section"><div class="wrap"><div class="empty">
+      <div class="em-ico">${ICON.warn}</div><h3>नहीं खुल पाया</h3>
+      <p>${esc(e.message)}</p>
+      <a class="btn btn-primary" href="#/developer">डेवलपर पैनल पर लौटें</a></div></div></section>`;
+    return;
+  }
+  paintDevElection(d);
+
+  /* हर 5 सेकंड में सिर्फ़ इसी चुनाव का ताज़ा डेटा */
+  devDetailTimer = setInterval(async () => {
+    try {
+      const fresh = await api('/api/dev/elections/' + encodeURIComponent(code));
+      paintDevElection(fresh);
+    } catch (_) {}
+  }, 5000);
+}
+
+function paintDevElection(d) {
+  const e = d.election;
+  const rows = d.votes || [];
+  const total = e.results ? e.results.totalVotes : 0;
+  const left = e.remainingMs > 0 ? fmtLeft(e.remainingMs) : '';
+
+  const votesTable = rows.length ? `
+    <div class="dev-vote-list" id="devOneTable">
+      ${rows.map((v) => `
+        <div class="dev-vote-item">
+          <div class="dvv-top">
+            <b>${esc(v.userName)}</b>
+            ${v.adopted ? '<span class="mini-badge">पहले बिना लॉगिन वोट, बाद में नाम जुड़ा</span>' : (v.linkedName ? '<span class="mini-badge">नाम बाद में जुड़ा</span>' : '')}
+            <span class="muted small">${esc(fullDate(v.at))}</span>
+          </div>
+          <div class="dvv-mid">
+            ${symbolSVG(v.candidateSymbol, 17)}
+            <span>को वोट दिया — <b>${esc(v.candidateName)}</b></span>
+          </div>
+          <div class="dvv-dev muted small">डिवाइस: ${esc(v.deviceShort || '—')}</div>
+        </div>`).join('')}
+    </div>` : `<div class="empty" style="padding:26px 14px">
+        <h3 style="font-size:16px">इस चुनाव में अभी कोई वोट नहीं</h3>
+        <p class="muted small">जैसे ही कोई वोट डालेगा, यहाँ नाम और उम्मीदवार दिख जाएगा।</p>
+      </div>`;
+
+  app.innerHTML = `
+  <section class="dev-page">
+    <div class="wrap">
+      <a class="link back-link" href="#/developer">← डेवलपर पैनल</a>
+
+      <div class="dev-one-head">
+        <div>
+          <div class="dev-one-badges">
+            ${e.closed ? '<span class="badge closed">समाप्त</span>' : '<span class="badge live"><i></i> चालू</span>'}
+            <span class="code-chip">${esc(e.code)}</span>
+            <span class="mini-badge">${esc(e.type || 'चुनाव')}</span>
+          </div>
+          <h1>${esc(e.title)}</h1>
+          <p class="muted">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}</p>
+          <p class="muted small">बनाने वाला: <b class="creator-tag">${esc(e.creatorName)}</b>
+            ${left ? ` · ⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b> बाकी` : ''}
+            ${e.closed ? ` · समाप्त ${esc(shortDate(e.closedAt || e.endsAt || Date.now()))}` : ''}</p>
+        </div>
+        <div class="dev-one-actions">
+          <button class="btn btn-ghost btn-sm" id="devOneRefresh">ताज़ा करें</button>
+          <button class="btn btn-ghost btn-sm" id="devOneCsv">${ICON.download} इसका CSV</button>
+          <a class="btn btn-ghost btn-sm" href="#/e/${esc(e.code)}" target="_blank" rel="noopener">सार्वजनिक पेज</a>
+          <button class="btn btn-ghost btn-sm" id="devOneToggle">${e.closed ? 'चुनाव फिर खोलें' : 'चुनाव बंद करें'}</button>
+          <button class="btn btn-danger btn-sm" id="devOneDelete">${ICON.trash || ''} चुनाव हटाएँ</button>
+        </div>
+      </div>
+
+      <div class="dev-stats dev-one-stats">
+        <div class="dev-stat"><b>${fmt(total)}</b><span>कुल वोट</span></div>
+        <div class="dev-stat"><b>${e.candidateCount || (e.candidates || []).length}</b><span>उम्मीदवार</span></div>
+        <div class="dev-stat"><b>${rows.length}</b><span>वोट रिकॉर्ड</span></div>
+        <div class="dev-stat"><b>${new Set(rows.map((v) => v.deviceShort)).size}</b><span>डिवाइस</span></div>
+      </div>
+
+      <div class="dev-card">
+        <div class="dev-card-head"><h3>इस चुनाव का नतीजा</h3>
+          <span class="mini-badge">सिर्फ़ ${esc(e.code)}</span></div>
+        <div class="dev-mini-results">
+          ${(e.results ? e.results.candidates : []).map((c) => `
+            <div class="dev-mini-row">
+              <span class="cand-cell">${symbolSVG(c.symbol, 16)} ${esc(c.name)}</span>
+              <span class="muted small">${fmt(c.votes)} वोट · ${c.percent}%</span>
+            </div>`).join('') || '<p class="muted small">उम्मीदवार नहीं</p>'}
+        </div>
+      </div>
+
+      <div class="dev-card">
+        <div class="dev-card-head">
+          <h3>किसने किसको वोट दिया (${rows.length})</h3>
+          <div class="dev-tools"><input type="search" id="devOneSearch" placeholder="मतदाता / उम्मीदवार…" /></div>
+        </div>
+        ${votesTable}
+        <p class="dev-note">यह सिर्फ़ इस चुनाव (<b>${esc(e.code)}</b>) का डेटा है — दूसरे चुनावों के वोट यहाँ नहीं मिलाए गए। सिर्फ़ डेवलपर को दिखता है।</p>
+      </div>
+    </div>
+  </section>`;
+
+  /* ताज़ा करें */
+  const rf = document.getElementById('devOneRefresh');
+  if (rf) rf.addEventListener('click', async () => {
+    rf.disabled = true;
+    try { paintDevElection(await api('/api/dev/elections/' + encodeURIComponent(e.code))); }
+    catch (err) { toast(err.message, 'err'); rf.disabled = false; }
+  });
+
+  /* इसी चुनाव का CSV */
+  const csvBtn = document.getElementById('devOneCsv');
+  if (csvBtn) csvBtn.addEventListener('click', () => {
+    const head = ['समय', 'मतदाता', 'उम्मीदवार', 'डिवाइस'];
+    const lines = [head.join(',')];
+    rows.forEach((v) => lines.push([fullDate(v.at), v.userName, v.candidateName, v.deviceShort || '']
+      .map((x) => '"' + String(x).replace(/"/g, '""') + '"').join(',')));
+    downloadFile('janmat-' + e.code + '-votes.csv', '\uFEFF' + lines.join('\n'), 'text/csv;charset=utf-8');
+  });
+
+  /* बंद / खोलें (डेवलपर — टाइमर की बंदिश उस पर लागू नहीं) */
+  const tg = document.getElementById('devOneToggle');
+  if (tg) tg.addEventListener('click', async () => {
+    tg.disabled = true;
+    try {
+      await api('/api/elections/' + encodeURIComponent(e.code) + '/' + (e.closed ? 'reopen' : 'close'), { method: 'POST' });
+      exploreCache = null;
+      toast(e.closed ? 'चुनाव फिर खोल दिया' : 'चुनाव बंद कर दिया', 'ok');
+      paintDevElection(await api('/api/dev/elections/' + encodeURIComponent(e.code)));
+    } catch (err) { toast(err.message, 'err'); tg.disabled = false; }
+  });
+
+  /* 🔴 किसी भी चुनाव को साइट से हटाएँ — चलता हो या पूरा, दोनों */
+  const del = document.getElementById('devOneDelete');
+  if (del) {
+    let armed = false, t = null;
+    del.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        del.textContent = 'पक्का? दोबारा दबाएँ — हमेशा के लिए हटेगा';
+        clearTimeout(t);
+        t = setTimeout(() => { armed = false; del.textContent = 'चुनाव हटाएँ'; }, 6000);
+        return;
+      }
+      clearTimeout(t);
+      del.disabled = true;
+      del.textContent = 'हट रहा है…';
+      try {
+        await api('/api/dev/elections/' + encodeURIComponent(e.code) + '/delete', { method: 'POST' });
+        exploreCache = null;
+        toast('चुनाव साइट से हटा दिया (कोड ' + e.code + ')', 'ok');
+        location.hash = '#/developer';
+      } catch (err) {
+        toast(err.message, 'err');
+        del.disabled = false;
+        del.textContent = 'चुनाव हटाएँ';
+        armed = false;
+      }
+    });
+  }
+
+  /* खोज */
+  const srch = document.getElementById('devOneSearch');
+  if (srch) srch.addEventListener('input', () => {
+    const q = srch.value.trim().toLowerCase();
+    $$('#devOneTable .dev-vote-item').forEach((row) => {
+      row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+
+  startDevLeftTicker();
+}
+
+/* बचा समय — हर सेकंड */
+function startDevLeftTicker() {
+  const els = $$('[data-devleft]');
+  if (!els.length) return;
+  const base = els.map((el) => Number(el.dataset.devleft) || 0);
+  const t0 = Date.now();
+  const tick = () => {
+    els.forEach((el, i) => {
+      const ms = base[i] - (Date.now() - t0);
+      el.textContent = ms > 0 ? fmtLeft(ms) : 'समय पूरा';
+    });
+  };
+  tick();
+  const iv = setInterval(tick, 1000);
+  setTimeout(() => clearInterval(iv), 1000 * 60 * 60 * 3);
+}
+
 function devBodyHTML() {
   if (!devData) return '';
+  if (devTab === 'active') return devActiveHTML();
   if (devTab === 'summary') return devSummaryHTML();
   if (devTab === 'users') return devUsersHTML();
   if (devTab === 'elections') return devElectionsHTML();
@@ -2869,6 +3172,7 @@ function devElectionsHTML() {
               <td class="nowrap">
                 <button class="btn btn-ghost btn-sm" data-e-detail="${e.code}">विवरण</button>
                 <button class="btn ${e.closed ? 'btn-ghost' : 'btn-danger'} btn-sm" data-dev-close="${e.code}" data-action="${e.closed ? 'reopen' : 'close'}">${e.closed ? 'खोलें' : 'बंद'}</button>
+                <button class="btn btn-ghost btn-sm" data-dev-del="${e.code}" title="साइट से पूरी तरह हटाएँ">हटाएँ</button>
               </td>
             </tr>`).join('')}
         </tbody>
@@ -2894,7 +3198,7 @@ function devVotesHTML() {
           ${devData.votes.map((v) => `
             <tr data-name="${esc((v.userName + ' ' + v.candidateName + ' ' + v.electionCode + ' ' + v.electionTitle).toLowerCase())}">
               <td class="nowrap">${esc(fullDate(v.at))}</td>
-              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}</td>
+              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}${v.adopted || v.linkedName ? ' <span class="mini-badge">नाम बाद में जुड़ा</span>' : ''}</td>
               <td class="nowrap"><a class="link" href="#/e/${v.electionCode}">${esc(v.electionCode)}</a><div class="muted small">${esc(v.electionTitle)}</div></td>
               <td><span class="cand-cell">${symbolSVG(v.candidateSymbol, 16)} ${esc(v.candidateName)}</span></td>
               <td>${esc(v.candidateParty || '—')}</td>
@@ -2908,6 +3212,19 @@ function devVotesHTML() {
 }
 
 function bindDevBody() {
+  /* चालू चुनाव के कार्ड → सिर्फ़ उसी चुनाव का पेज */
+  $$('[data-e-open]').forEach((card) => {
+    card.addEventListener('click', () => { location.hash = '#/developer/e/' + card.dataset.eOpen; });
+  });
+  const actSearch = document.getElementById('devActiveSearch');
+  if (actSearch) actSearch.addEventListener('input', () => {
+    const q = actSearch.value.trim().toLowerCase();
+    $$('#devActiveList .dev-ecard').forEach((c) => {
+      c.style.display = !q || (c.dataset.name || '').includes(q) ? '' : 'none';
+    });
+  });
+  startDevLeftTicker();
+
   const jump = (tab) => {
     devTab = tab;
     $$('[data-devt]').forEach((b) => b.classList.toggle('active', b.dataset.devt === tab));
@@ -2985,27 +3302,36 @@ function bindDevBody() {
   });
 
   $$('[data-e-detail]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      location.hash = '#/developer/e/' + btn.dataset.eDetail;
+    });
+  });
+
+  $$('[data-dev-del]').forEach((btn) => {
+    let armed = false, t = null;
     btn.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        btn.textContent = 'पक्का?';
+        btn.classList.add('armed');
+        clearTimeout(t);
+        t = setTimeout(() => { armed = false; btn.textContent = 'हटाएँ'; btn.classList.remove('armed'); }, 6000);
+        return;
+      }
+      clearTimeout(t);
+      btn.disabled = true;
       try {
-        const d = await api('/api/dev/elections/' + btn.dataset.eDetail);
-        const e = d.election;
-        openDevModal(`
-          <h3>${esc(e.title)}</h3>
-          <p class="muted small">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)} · बनाने वाला: <b class="creator-tag">${esc(e.creatorName)}</b> · ${e.closed ? 'समाप्त' : 'चालू'}</p>
-          <div class="dev-mini-results">
-            ${e.results.candidates.map((c) => `
-              <div class="dev-mini-row">
-                <span class="cand-cell">${symbolSVG(c.symbol, 16)} ${esc(c.name)}</span>
-                <span class="muted small">${fmt(c.votes)} वोट · ${c.percent}%</span>
-              </div>`).join('')}
-          </div>
-          <h4 style="margin:16px 0 8px">किसने किसको वोट दिया (${d.votes.length})</h4>
-          <div class="table-wrap tall">
-            <table class="dev-table"><thead><tr><th>समय</th><th>मतदाता</th><th>उम्मीदवार</th><th>डिवाइस</th></tr></thead><tbody>
-              ${d.votes.map((v) => `<tr><td class="nowrap">${esc(fullDate(v.at))}</td><td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}</td><td>${esc(v.candidateName)}</td><td class="muted small">${esc(v.deviceShort)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">कोई वोट नहीं</td></tr>'}
-            </tbody></table>
-          </div>`);
-      } catch (e) { toast(e.message, 'err'); }
+        await api('/api/dev/elections/' + encodeURIComponent(btn.dataset.devDel) + '/delete', { method: 'POST' });
+        exploreCache = null;
+        toast('चुनाव साइट से हटा दिया (कोड ' + btn.dataset.devDel + ')', 'ok');
+        renderDeveloper();
+      } catch (err) {
+        toast(err.message, 'err');
+        btn.disabled = false;
+        armed = false;
+        btn.textContent = 'हटाएँ';
+        btn.classList.remove('armed');
+      }
     });
   });
 
@@ -3079,7 +3405,7 @@ function renderDevLogin() {
       const res = await api('/api/dev/login', { method: 'POST', body: { password: input.value } });
       state.devToken = res.devToken;
       store.set('jm_dev_token', res.devToken);
-      devTab = 'summary';
+      devTab = 'active';   /* खुलते ही "चालू चुनाव" — हर चुनाव का अलग कार्ड */
       toast('डेवलपर एक्सेस खुल गया', 'ok');
       renderDeveloper();
     } catch (e) {
@@ -3349,6 +3675,7 @@ function route() {
   if (parts[0] === 'disclaimer') return renderDisclaimer();
   if (parts[0] === 'terms') return renderTerms();
   if (parts[0] === 'privacy') return renderPrivacy();
+  if (parts[0] === 'developer' && parts[1] === 'e' && parts[2]) return renderDevElection(parts[2].toUpperCase());
   if (parts[0] === 'developer') return renderDeveloper();
   if (parts[0] === 'settings') return renderSettings(parts[1] || 'main');
   if (parts[0] === 'e' && parts[1]) return renderElection(parts[1].toUpperCase());

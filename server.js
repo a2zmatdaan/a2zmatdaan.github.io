@@ -395,6 +395,8 @@ function publicSummary(e) {
   };
 }
 
+const APP_VERSION = '7.0-guest-vote';
+
 function publicElection(e, viewer) {
   const t = tally(e);
   const myVote = viewer && e.votes[viewer.id] ? e.votes[viewer.id].c : null;
@@ -428,6 +430,42 @@ function quotaFor(user) {
 
 function publicUser(u) {
   return { id: u.id, name: u.name, createdAt: u.createdAt };
+}
+
+/* 🟢 बिना लॉगिन वोट (मेहमान मतदाता) — शेयर किया लिंक खोलने वाले को
+   लॉगिन करने की ज़रूरत नहीं। पहचान डिवाइस से बनती है, इसलिए नाम के बिना भी
+   "एक डिवाइस = एक वोट" का नियम लागू रहता है। */
+function guestVoterId(req, bodyDevice) {
+  return 'g:' + deviceKeyFrom(req, bodyDevice);
+}
+
+/* 🟢 बिना लॉगिन किया गया वोट, बाद में उसी फ़ोन से लॉगिन करने पर
+   उस व्यक्ति के नाम से जुड़ जाता है ("मेहमान मतदाता" नहीं रहता)।
+   वोट की गिनती वैसी ही रहती है — सिर्फ़ पहचान जुड़ती है। */
+function adoptGuestVotes(user, device) {
+  const key = 'g:' + device;
+  let adopted = 0;
+  for (const e of db.elections) {
+    const gv = e.votes && e.votes[key];
+    if (!gv) continue;
+    if (e.votes[user.id]) {
+      /* इस व्यक्ति का वोट पहले से है — दोनों वोट रहेंगे, पर नाम जुड़ जाएगा */
+      gv.linkedUserId = user.id;
+      gv.linkedName = user.name;
+      continue;
+    }
+    delete e.votes[key];
+    e.votes[user.id] = {
+      c: gv.c,
+      at: gv.at || Date.now(),
+      device: gv.device || device,
+      guest: false,
+      adoptedAt: Date.now(),
+    };
+    if (e.devices && e.devices[device]) e.devices[device].userId = user.id;
+    adopted++;
+  }
+  return adopted;
 }
 
 function deviceKeyFrom(req, bodyDevice) {
@@ -596,6 +634,7 @@ async function handleApi(req, res, pathname) {
       ok: true,
       storage: storageMode,
       version: 2,
+      app: APP_VERSION,
       seedDemo: SEED_DEMO,
       liveConnections: liveClients.size,
       time: Date.now(),
@@ -672,13 +711,16 @@ async function handleApi(req, res, pathname) {
       user.devices = Object.fromEntries(entries);
     }
 
+    /* इस फ़ोन से पहले बिना लॉगिन जो वोट पड़े थे, उन पर अब इसका नाम लग जाए */
+    const adopted = adoptGuestVotes(user, device);
+
     const token = rid(24);
     user.tokens[token] = Date.now();
     const tokens = Object.entries(user.tokens).sort((a, b) => b[1] - a[1]).slice(0, 12);
     user.tokens = Object.fromEntries(tokens);
 
     await saveNow();
-    return sendJson(res, 200, { user: publicUser(user), token, quota: quotaFor(user) });
+    return sendJson(res, 200, { user: publicUser(user), token, quota: quotaFor(user), adoptedVotes: adopted });
   }
 
   /* ---------- device rebind: is mobile ka na
@@ -849,59 +891,57 @@ async function handleApi(req, res, pathname) {
 
   if (method === 'GET' && election && parts.length === 3) {
     syncElection(election);
-    return sendJson(res, 200, publicElection(election, viewer));
+    /* लॉगिन न हो तो भी उस डिवाइस का वोट दिखे (hasVoted/myVote) */
+    const who = viewer || { id: guestVoterId(req), name: 'मेहमान मतदाता', guest: true };
+    return sendJson(res, 200, publicElection(election, who));
   }
 
   /* ---------- election: vote ---------- */
   if (method === 'POST' && election && parts[3] === 'vote') {
-    if (!viewer) {
-      return sendJson(res, 401, { error: 'वोट देने के लिए पहले अपना नाम लिखकर लॉगिन करें।', code: 'LOGIN_REQUIRED' });
-    }
     syncElection(election);   /* समय पूरा हो गया हो तो अभी बंद करो */
     if (election.closed) {
       return sendJson(res, 403, { error: 'यह चुनाव समाप्त हो चुका है, अब वोट नहीं डाला जा सकता।' });
     }
-    if (!rateLimit(req, 'vote', 40, 60000)) {
+    if (!rateLimit(req, 'vote', 150, 60000)) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा अनुरोध। थोड़ी देर बाद प्रयास करें।' });
     }
     const body = await readBody(req);
     const candidateId = clean(body.candidateId, 40);
     const device = deviceKeyFrom(req, body.deviceId);
+    /* लॉगिन है तो उसका खाता, वरना यह डिवाइस ही मतदाता है */
+    const voterId = viewer ? viewer.id : 'g:' + device;
+    const voterName = viewer ? viewer.name : 'मेहमान मतदाता';
 
     const cand = election.candidates.find((c) => c.id === candidateId);
     if (!cand) return sendJson(res, 400, { error: 'उम्मीदवार नहीं मिला।' });
 
-    if (election.votes[viewer.id]) {
+    if (election.votes[voterId]) {
       return sendJson(res, 409, {
         error: 'आप इस चुनाव में पहले ही वोट कर चुके हैं।',
         code: 'ALREADY_VOTED',
-        election: publicElection(election, viewer),
+        election: publicElection(election, { id: voterId, name: voterName }),
       });
     }
     const dev = election.devices[device];
     if (dev) {
-      const other = findUserById(dev.userId);
-      const samePerson = other && other.id === viewer.id;
       return sendJson(res, 409, {
-        error: samePerson
-          ? 'इस चुनाव में आपका वोट पहले ही दर्ज है।'
-          : 'इस फ़ोन/डिवाइस से इस चुनाव में वोट दिया जा चुका है। एक डिवाइस से सिर्फ़ एक ही वोट मान्य है।',
+        error: 'इस फ़ोन/डिवाइस से इस चुनाव में वोट दिया जा चुका है। एक डिवाइस से सिर्फ़ एक ही वोट मान्य है।',
         code: 'DEVICE_VOTED',
-        election: publicElection(election, viewer),
+        election: publicElection(election, { id: voterId, name: voterName }),
       });
     }
 
-    election.votes[viewer.id] = { c: cand.id, at: Date.now(), device };
-    election.devices[device] = { userId: viewer.id, at: Date.now() };
+    election.votes[voterId] = { c: cand.id, at: Date.now(), device, guest: !viewer };
+    election.devices[device] = { userId: voterId, at: Date.now() };
     await saveNow();
 
     // 🔴 real-time: election subscribers ko naya tally + developer ko live vote
     const fresh = publicElection(election, null);
     broadcastElection(election.code, { election: fresh });
     broadcastDev('vote', {
-      at: election.votes[viewer.id].at,
-      userName: viewer.name,
-      userId: viewer.id,
+      at: election.votes[voterId].at,
+      userName: voterName,
+      userId: voterId,
       electionCode: election.code,
       electionTitle: election.title,
       candidateName: cand.name,
@@ -913,7 +953,7 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, {
       ok: true,
       votedFor: { id: cand.id, name: cand.name, symbol: cand.symbol },
-      election: publicElection(election, viewer),
+      election: publicElection(election, { id: voterId, name: voterName }),
     });
   }
 
@@ -1181,6 +1221,10 @@ async function handleApi(req, res, pathname) {
           totalVotes: t.totalVotes,
           candidateCount: e.candidates.length,
           deviceCount: Object.keys(e.devices || {}).length,
+          endsAt: e.endsAt || null,
+          durationMin: e.durationMin || 0,
+          remainingMs: remainingMs(e),
+          timeUp: isTimeUp(e),
           leading: t.candidates[0] || null,
           winner: e.closed ? (t.candidates[0] || null) : null,
         };
@@ -1194,8 +1238,9 @@ async function handleApi(req, res, pathname) {
         voteRows.push({
           at: (v && v.at) || 0,
           userId: uid,
-          userName: u ? u.name : 'अज्ञात उपयोगकर्ता',
-          userIsDemo: u ? !!u.isDemo : true,
+          userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).startsWith('g:') ? 'मेहमान मतदाता' : 'अज्ञात उपयोगकर्ता')),
+          linkedName: (v && v.linkedName) || null,
+          userIsDemo: u ? !!u.isDemo : false,
           electionCode: e.code,
           electionTitle: e.title,
           electionDemo: !!e.isDemo,
@@ -1203,6 +1248,7 @@ async function handleApi(req, res, pathname) {
           candidateName: cand ? cand.name : '—',
           candidateSymbol: cand ? cand.symbol || 'diya' : 'diya',
           candidateParty: cand ? cand.party || '' : '',
+          adopted: !!(v && v.adoptedAt),
           deviceShort: v && v.device ? String(v.device).slice(0, 10) : '',
         });
       });
@@ -1217,6 +1263,8 @@ async function handleApi(req, res, pathname) {
       votes: voteRows.length,
       todayElections: db.elections.filter((e) => istDayKey(e.createdAt) === today).length,
       todayVotes: voteRows.filter((v) => istDayKey(v.at) === today).length,
+      activeElections: db.elections.filter((e) => !e.closed).length,
+      closedElections: db.elections.filter((e) => !!e.closed).length,
       storage: storageMode,
       dailyLimit: DAILY_ELECTION_LIMIT,
       serverTime: Date.now(),
@@ -1236,8 +1284,10 @@ async function handleApi(req, res, pathname) {
         const cand = e.candidates.find((c) => c.id === (v && v.c));
         return {
           at: (v && v.at) || 0,
-          userName: u ? u.name : 'अज्ञात',
-          userIsDemo: u ? !!u.isDemo : true,
+          userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).startsWith('g:') ? 'मेहमान मतदाता' : 'अज्ञात')),
+          userIsDemo: u ? !!u.isDemo : false,
+          linkedName: (v && v.linkedName) || null,
+          adopted: !!(v && v.adoptedAt),
           candidateName: cand ? cand.name : '—',
           candidateSymbol: cand ? cand.symbol || 'diya' : 'diya',
           deviceShort: v && v.device ? String(v.device).slice(0, 10) : '',
@@ -1262,13 +1312,25 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true });
   }
 
-  /* developer: delete an election permanently */
+  /* 🔴 डेवलपर: कोई भी चुनाव, कभी भी (चलता हुआ हो या पूरा) — साइट से हटा सकता है।
+     सिर्फ़ डेवलपर के पास यह ताक़त है; बनाने वाला टाइमर के बीच में नहीं हटा सकता। */
   if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'elections' && parts[4] === 'delete') {
-    const idx = db.elections.findIndex((e) => e.code === clean(parts[3], 16).toUpperCase());
-    if (idx === -1) return sendJson(res, 404, { error: 'चुनाव नहीं मिला।' });
+    const target = clean(parts[3], 16).toUpperCase();
+    const idx = db.elections.findIndex((e) => e.code === target);
+    if (idx === -1) return sendJson(res, 404, { error: 'चुनाव नहीं मिला।', code: 'ELECTION_NOT_FOUND' });
+    const gone = db.elections[idx];
     db.elections.splice(idx, 1);
     await saveNow();
-    return sendJson(res, 200, { ok: true });
+    /* खुले हुए मतदाताओं को तुरंत पता चले + फ़ीड में दिखे */
+    broadcastElection(target, { deleted: true, code: target });
+    broadcastDev('election-deleted', {
+      at: Date.now(), code: target, title: gone.title,
+      by: 'developer', totalVotes: Object.keys(gone.votes || {}).length,
+    });
+    return sendJson(res, 200, {
+      ok: true, deleted: target,
+      message: 'चुनाव साइट से हटा दिया गया (डेवलपर द्वारा)।',
+    });
   }
 
   return sendJson(res, 404, { error: 'API नहीं मिली।' });
@@ -1381,6 +1443,55 @@ const server = http.createServer((req, res) => {
     db = seedDb();
     await persistNow(db);
   }
+  /* ⏱️ टाइमर वाला चुनाव अपने आप बंद — 20 सेकंड में एक बार जाँच।
+     इससे जो लोग पेज खोले बैठे हैं उन्हें बिना रीलोड "समाप्त" दिख जाता है। */
+  setInterval(() => {
+    for (const e of db.elections) {
+      if (!e.closed && isTimeUp(e)) {
+        syncElection(e);
+        broadcastElection(e.code, { election: publicElection(e, null) });
+        broadcastDev('election-closed', {
+          at: Date.now(), code: e.code, title: e.title, auto: true,
+          totalVotes: Object.keys(e.votes || {}).length,
+        });
+      }
+    }
+  }, 20000).unref?.();
+
+  /* =====================================================================
+     🧹 एक बार चलने वाली सफ़ाई (25 अक्टूबर 2026)
+     ऑडिट के दौरान ग़लती से लाइव साइट पर जो टेस्ट चुनाव/टेस्ट खाते बने थे,
+     उन्हें हटाता है। असली यूज़र का डेटा नहीं छूता — कड़ी शर्तें लगी हैं:
+       • चुनाव: बिल्कुल वही कोड + बिल्कुल वही गाँव का नाम + 0 वोट
+       • खाते: ठीक वही टेस्ट नाम + कोई चुनाव नहीं + कोई वोट नहीं
+     एक बार चलने के बाद दोबारा नहीं चलेगा (db.migrations में निशान)।
+     ===================================================================== */
+  (async () => {
+    const KEY = 'cleanup-test-data-2026-10-25';
+    if (!db.migrations) db.migrations = {};
+    if (db.migrations[KEY]) return;
+    let eRemoved = 0, uRemoved = 0;
+    const i = db.elections.findIndex((e) => e.code === '4TDPPF' && e.gram === 'ज़िप गाँव' && Object.keys(e.votes || {}).length === 0);
+    if (i !== -1) { db.elections.splice(i, 1); eRemoved++; }
+    const TEST_NAMES = new Set(['अंतिम जाँच', 'नया व्यक्ति लाइव', 'घड़ी जाँच', 'जाँच टीम', 'लाइव अंतिम', 'कोई और']);
+    db.users = db.users.filter((u) => {
+      const n = String(u.name || '');
+      const isTest = TEST_NAMES.has(n) || /^ज़िप वाला \d+$/.test(n) || /^लिंक वाला \d+$/.test(n) || /^ऑटो टेस्ट \d+$/.test(n) || /^समय परख \d+$/.test(n) || /^लाइव बंद \d+$/.test(n) || /^बंद चुनाव वाला \d+$/.test(n);
+      if (!isTest) return true;
+      const hasElection = db.elections.some((e) => e.creatorId === u.id);
+      const hasVote = db.elections.some((e) => e.votes && e.votes[u.id]);
+      if (hasElection || hasVote) return true;
+      if (db.deviceOwner) Object.keys(db.deviceOwner).forEach((d) => { if (db.deviceOwner[d] === u.id) delete db.deviceOwner[d]; });
+      uRemoved++;
+      return false;
+    });
+    db.migrations[KEY] = Date.now();
+    if (eRemoved || uRemoved) {
+      await saveNow();
+      console.log(`🧹 सफ़ाई: ${eRemoved} टेस्ट चुनाव, ${uRemoved} टेस्ट खाते हटाए (असली डेटा अछूता)`);
+    }
+  })();
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log('──────────────────────────────────────────────');
     console.log('🗳️  जनमत (Janmat) server v2');

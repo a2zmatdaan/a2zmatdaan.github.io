@@ -1621,3 +1621,21 @@ select {
 .dvv-mid b { color: var(--ink); }
 .dvv-dev { font-size: 12px; }
 :root[data-theme="dark"] .dev-vote-item { background: #1a1f3a; border-color: #2a3057; }
+
+/* डेवलपर: शक/चेतावनी बैनर */
+.dev-warn {
+  background: #fff7e6; border: 1.5px solid #ffd9a0; border-left: 5px solid #f59e0b;
+  border-radius: 14px; padding: 13px 15px; margin-bottom: 14px;
+  font-size: 13.5px; line-height: 1.65; color: #7a4a00;
+}
+.dev-warn b { color: #6b3f00; }
+:root[data-theme="dark"] .dev-warn { background: #3a2a12; border-color: #6b4a15; color: #ffd9a0; }
+
+/* =====================================================================
+   🟢 पेज कभी खाली न दिखे — footer हमेशा नीचे, बीच में खाली जगह नहीं
+   ===================================================================== */
+html, body { min-height: 100%; }
+body { display: flex; flex-direction: column; min-height: 100vh; }
+main#app { flex: 1 0 auto; }
+.site-footer { margin-top: auto; }
+@media (min-width: 900px) { main#app { min-height: 58vh; } }

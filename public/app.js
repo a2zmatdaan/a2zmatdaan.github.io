@@ -60,19 +60,127 @@ const store = {
 };
 
 /* --------------------------- device id --------------------------- */
-/* ek phone/computer = ek device. Fingerprint + localStorage, dono. */
+/* 🟢 ek phone = ek device — id teen जगह रखी जाती है:
+   localStorage + IndexedDB + cookie. Cache/cookies साफ़ करने पर भी कम-से-कम
+   एक जगह से बच जाती है, इसलिए वही नाम और वही खाता वापस मिलता है। */
 let DEVICE_ID = null;
+let savedNameHint = null;   /* इस फ़ोन से पहले जो नाम इस्तेमाल हुआ */
+const DEV_KEY = 'jm_device';
+
+function cookieGet(name) {
+  try {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch (_) { return null; }
+}
+function cookieSet(name, val, days) {
+  try {
+    const d = new Date(Date.now() + (days || 3650) * 864e5);
+    document.cookie = name + '=' + encodeURIComponent(val) + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
+  } catch (_) {}
+}
+function idbOpen() {
+  return new Promise((res) => {
+    try {
+      const rq = indexedDB.open('janmat', 1);
+      rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv'); } catch (_) {} };
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => res(null);
+    } catch (_) { res(null); }
+  });
+}
+async function idbGet(k) {
+  const db = await idbOpen();
+  if (!db) return null;
+  return new Promise((res) => {
+    try {
+      const tx = db.transaction('kv', 'readonly').objectStore('kv').get(k);
+      tx.onsuccess = () => res(tx.result || null);
+      tx.onerror = () => res(null);
+    } catch (_) { res(null); }
+  });
+}
+async function idbSet(k, v) {
+  const db = await idbOpen();
+  if (!db) return;
+  try {
+    db.transaction('kv', 'readwrite').objectStore('kv').put(v, k);
+  } catch (_) {}
+}
+
+/* 🧬 फ़ोन की पहचान — डेटा मिटने के बाद भी वही फ़ोन पहचाना जाए */
+let FP = null;
+async function initFingerprint() {
+  if (FP) return FP;
+  const bits = [
+    navigator.userAgent, navigator.language,
+    (navigator.languages || []).join(','),
+    screen.width + 'x' + screen.height + 'x' + (screen.colorDepth || 0),
+    window.devicePixelRatio || 1,
+    (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (_) { return ''; } })(),
+    navigator.hardwareConcurrency || 0,
+    navigator.deviceMemory || 0,
+    navigator.platform || '',
+    navigator.maxTouchPoints || 0,
+  ];
+  /* canvas */
+  try {
+    const c = document.createElement('canvas');
+    c.width = 240; c.height = 50;
+    const ctx = c.getContext('2d');
+    if (ctx) {
+      ctx.textBaseline = 'top';
+      ctx.font = '16px "Noto Sans Devanagari", Arial';
+      ctx.fillStyle = '#123';
+      ctx.fillRect(0, 0, 240, 50);
+      ctx.fillStyle = '#fff';
+      ctx.fillText('जनमत · vote · ' + navigator.userAgent.length, 4, 6);
+      ctx.fillStyle = 'rgba(255,180,0,.7)';
+      ctx.fillText('॥ १२३ ॥', 140, 26);
+      bits.push(c.toDataURL().slice(-160));
+    }
+  } catch (_) {}
+  /* webgl */
+  try {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      bits.push(dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '');
+      bits.push(String(gl.getParameter(gl.VENDOR)) + '|' + String(gl.getParameter(gl.RENDERER)));
+    }
+  } catch (_) {}
+  const raw = bits.join('|');
+  let hash = '';
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    hash = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (_) {
+    let h = 0;
+    for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) >>> 0;
+    hash = 'fb' + h.toString(16) + 'fb' + raw.length.toString(16);
+  }
+  FP = 'fp_' + hash.slice(0, 40);
+  return FP;
+}
+
 async function initDeviceId() {
   if (DEVICE_ID) return DEVICE_ID;
-  let saved = store.get('jm_device');
-  if (saved) { DEVICE_ID = saved; return DEVICE_ID; }
+  let saved = store.get(DEV_KEY) || cookieGet(DEV_KEY) || (await idbGet(DEV_KEY));
+  if (saved) {
+    DEVICE_ID = saved;
+    store.set(DEV_KEY, saved); cookieSet(DEV_KEY, saved); idbSet(DEV_KEY, saved);
+    return DEVICE_ID;
+  }
 
-  /* 🟢 हर फ़ोन/ब्राउज़र की अपनी अलग पहचान — random id, localStorage में सुरक्षित।
-     (पहले फिंगरप्रिंट से बनाते थे — एक ही मॉडल के दो फ़ोन का फिंगरप्रिंट एक जैसा
-     निकलता था, जिससे दूसरे असली मतदाता का वोट रुक जाता था।) */
+  /* 🟢 हर फ़ोन/ब्राउज़र की अपनी अलग पहचान — random id */
   const fresh = 'dev_' + genId().replace(/-/g, '') + Math.random().toString(16).slice(2, 10);
-  store.set('jm_device', fresh);
-  if (store.get('jm_device') === fresh) { DEVICE_ID = fresh; return DEVICE_ID; }
+  store.set(DEV_KEY, fresh);
+  cookieSet(DEV_KEY, fresh);
+  idbSet(DEV_KEY, fresh);
+  if (store.get(DEV_KEY) === fresh || cookieGet(DEV_KEY) === fresh || (await idbGet(DEV_KEY)) === fresh) {
+    DEVICE_ID = fresh;
+    return DEVICE_ID;
+  }
 
   /* localStorage बंद है (कुछ प्राइवेट मोड) → फिंगरप्रिंट से काम चलाओ */
   const bits = [
@@ -177,6 +285,7 @@ async function api(path, opts = {}) {
   if (state.token) headers['x-user-token'] = state.token;
   if (state.devToken) headers['x-dev-token'] = state.devToken;
   if (DEVICE_ID) headers['x-device-id'] = DEVICE_ID;
+  if (FP) headers['x-fp'] = FP;
   let body;
   if (opts.body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -372,6 +481,7 @@ function fmtDuration(min) {
 }
 
 /** बचा समय — "2 घंटे 14 मिनट बाकी" / "4 मिनट 09 सेकंड बाकी" */
+/* ⏱️ बचा समय — हर सेकंड बदलता हुआ (दिन/घंटे/मिनट सब में सेकंड दिखते हैं) */
 function fmtLeft(ms) {
   const total = Math.max(0, Math.round((Number(ms) || 0) / 1000));
   if (total <= 0) return 'समय पूरा';
@@ -379,10 +489,11 @@ function fmtLeft(ms) {
   const h = Math.floor((total % 86400) / 3600);
   const m = Math.floor((total % 3600) / 60);
   const sec = total % 60;
-  if (d > 0) return `${d} दिन ${h} घंटे बाकी`;
-  if (h > 0) return `${h} घंटे ${m} मिनट बाकी`;
-  if (m > 0) return `${m} मिनट ${String(sec).padStart(2, '0')} सेकंड बाकी`;
-  return `${sec} सेकंड बाकी`;
+  const ss = String(sec).padStart(2, '0');
+  if (d > 0) return `${d} दिन ${h} घंटे ${m} मिनट ${ss} सेकंड बाकी`;
+  if (h > 0) return `${h} घंटे ${m} मिनट ${ss} सेकंड बाकी`;
+  if (m > 0) return `${m} मिनट ${ss} सेकंड बाकी`;
+  return `${ss} सेकंड बाकी`;
 }
 
 /** 🔒 एक जगह से नियम तय — चुनाव चलते समय निर्माता कुछ नहीं बदल सकता */
@@ -675,6 +786,23 @@ async function logoutUser() {
   location.hash = '#/';
 }
 
+/* 🟢 इस फ़ोन से पहले जो लॉगिन कर चुका है, उसे फिर नाम न लिखना पड़े */
+async function tryAutoLogin() {
+  if (state.token) return { ok: true, already: true };
+  try {
+    const res = await api('/api/auth/auto', { method: 'POST', body: { deviceId: DEVICE_ID } });
+    if (res.ok && res.token) {
+      state.user = res.user;
+      state.token = res.token;
+      state.quota = res.quota;
+      store.set('jm_token', res.token);
+      renderNavAuth();
+      return { ok: true, user: res.user };
+    }
+    return { ok: false, hint: res.hint || null };
+  } catch (_) { return { ok: false, hint: null }; }
+}
+
 async function refreshMe() {
   if (!state.token) { state.user = null; return null; }
   try {
@@ -762,6 +890,11 @@ function askRebind(ownerName, desiredName, onDone) {
 }
 
 function bindLoginCard(onDone) {
+  const savedBtn = document.getElementById('useSavedName');
+  if (savedBtn) savedBtn.addEventListener('click', () => {
+    const inp = document.getElementById('loginName');
+    if (inp) { inp.value = savedNameHint || ''; inp.focus(); }
+  });
   const form = document.getElementById('inlineLoginForm');
   if (!form) return;
   const input = document.getElementById('inlineName');
@@ -806,7 +939,7 @@ function electionCard(e) {
         ${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}
       </div>
       <div class="sym-row">${syms}</div>
-      ${e.endsAt && !e.closed ? `<div class="ecard-timer">⏳ <b>${esc(fmtLeft(e.remainingMs || 0))}</b></div>` : ''}
+      ${e.endsAt && !e.closed ? `<div class="ecard-timer">⏳ <b data-left="${e.remainingMs || 0}">${esc(fmtLeft(e.remainingMs || 0))}</b></div>` : ''}
     </div>
     <div class="ecard-foot">
       <div class="ecard-votes">
@@ -1204,7 +1337,15 @@ async function renderExplore() {
     draw();
   } catch (e) {
     listBox.innerHTML = '';
-    document.getElementById('emptyBox').innerHTML = `<div class="empty"><div class="em-ico">${ICON.warn}</div><h3>लोड नहीं हो पाया</h3><p>${esc(e.message)}</p></div>`;
+    document.getElementById('emptyBox').innerHTML = `<div class="empty">
+      <div class="em-ico">${ICON.warn}</div><h3>लोड नहीं हो पाया</h3>
+      <p>${esc(e.message)}</p>
+      <div class="empty-actions">
+        <button class="btn btn-primary" id="exploreRetry">फिर कोशिश करें</button>
+        <a class="btn btn-ghost" href="#/">होम पर जाएँ</a>
+      </div></div>`;
+    const rt = document.getElementById('exploreRetry');
+    if (rt) rt.addEventListener('click', () => { exploreCache = null; renderExplore(); });
   }
 }
 
@@ -2010,6 +2151,39 @@ function bindElectionPage(d) {
           await renderElection(d.code, { refresh: true });
           return;
         }
+        if (e.status === 409 && e.code === 'SAME_PHONE_VOTED' && e.data && e.data.allowOverride) {
+          /* 🧬 इस फ़ोन से पहले ही वोट पड़ चुका है — पहले रोको, फिर पूछो */
+          voteBtn.disabled = true;
+          voteBtn.textContent = 'यह फ़ोन पहले वोट कर चुका है';
+          const grid2 = document.getElementById('voteGrid');
+          if (grid2 && !document.getElementById('samePhoneBox')) {
+            const box = document.createElement('div');
+            box.id = 'samePhoneBox';
+            box.className = 'guest-note';
+            box.style.cssText = 'margin-top:14px;background:#fff7e6;border-color:#ffd9a0;border-left-color:#f59e0b';
+            box.innerHTML = `<b>इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है।</b>
+              <span>एक फ़ोन से एक ही वोट मान्य है। अगर यह आपका वोट नहीं है और आप दूसरे व्यक्ति हैं
+              (एक ही मॉडल का दूसरा फ़ोन), तो नीचे दबाइए — आपका वोट अलग से दर्ज होगा और डेवलपर को दिखेगा।</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="samePhoneOverride" style="margin-top:9px;align-self:flex-start">
+                मैं दूसरा व्यक्ति हूँ — मेरा वोट दर्ज करें
+              </button>`;
+            grid2.parentNode.insertBefore(box, grid2.nextSibling);
+            document.getElementById('samePhoneOverride').addEventListener('click', async () => {
+              const b2 = document.getElementById('samePhoneOverride');
+              b2.disabled = true;
+              b2.textContent = 'दर्ज हो रहा है…';
+              try {
+                await api('/api/elections/' + encodeURIComponent(d.code) + '/vote', {
+                  method: 'POST',
+                  body: { candidateId: selectedCandidate, deviceId: DEVICE_ID, overrideSamePhone: true },
+                });
+                toast('वोट दर्ज हो गया (दूसरे व्यक्ति के रूप में)', 'ok');
+                await renderElection(d.code, { refresh: true });
+              } catch (err2) { toast(err2.message, 'err'); b2.disabled = false; b2.textContent = 'मैं दूसरा व्यक्ति हूँ — मेरा वोट दर्ज करें'; }
+            });
+          }
+          return;
+        }
         if (e.status === 409) { await renderElection(d.code, { refresh: true }); return; }
         voteBtn.disabled = false;
         voteBtn.textContent = 'वोट दर्ज करें';
@@ -2148,6 +2322,14 @@ function renderLogin() {
         <div class="login-card-ico">${ICON.user}</div>
         <h3>नाम से लॉगिन</h3>
         <p class="muted">यही नाम आपकी पहचान है — इससे आप चुनाव बना सकते हैं। <b>वोट देने के लिए लॉगिन ज़रूरी नहीं</b> — शेयर किया लिंक खोलकर सीधे वोट कीजिए।</p>
+        ${savedNameHint ? `<div class="guest-note" style="margin-bottom:14px">
+          <b>इस फ़ोन से पहले लॉगिन हुआ था।</b>
+          <span>अगर यही फ़ोन आपका है तो नीचे दबाइए — सीधे उसी खाते में लॉगिन हो जाएगा।</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="useSavedName" style="margin-top:8px;align-self:flex-start">
+            "${esc(savedNameHint)}" से लॉगिन करें
+          </button>
+          <span class="muted small" style="margin-top:6px">यह फ़ोन किसी और का है? तो अपना नाम नीचे लिखिए — एक फ़ोन = एक नाम.</span>
+        </div>` : ''}
         <form id="loginForm" autocomplete="off">
           <input id="loginName" type="text" placeholder="आपका नाम (जैसे: रवि शर्मा)" maxlength="30" aria-label="आपका नाम" />
           <button class="btn btn-primary btn-lg" type="submit" id="loginBtn">लॉगिन करें</button>
@@ -2167,6 +2349,13 @@ function renderLogin() {
   const form = document.getElementById('loginForm');
   const input = document.getElementById('loginName');
   const btn = document.getElementById('loginBtn');
+  /* पहले से पहचाना गया नाम — एक टैप में भर जाए */
+  const savedBtn = document.getElementById('useSavedName');
+  if (savedBtn) savedBtn.addEventListener('click', () => {
+    input.value = savedNameHint || '';
+    input.focus();
+    savedBtn.textContent = 'नाम भर दिया — अब "लॉगिन करें" दबाइए';
+  });
   input.focus();
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -2778,7 +2967,7 @@ function devActiveHTML() {
       <button class="dev-ecard" data-e-open="${esc(e.code)}" data-name="${esc((e.title + ' ' + e.code + ' ' + e.gram + ' ' + e.creatorName).toLowerCase())}">
         <div class="dev-ecard-top">
           <span class="badge live"><i></i> चालू</span>
-          ${left ? `<span class="dev-ecard-left">⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b> बाकी</span>` : ''}
+          ${left ? `<span class="dev-ecard-left">⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b></span>` : ''}
         </div>
         <h4>${esc(e.title)}</h4>
         <div class="dev-ecard-place">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}</div>
@@ -2852,13 +3041,11 @@ function paintDevElection(d) {
           <div class="dvv-top">
             <b>${esc(v.userName)}</b>
             ${v.adopted ? '<span class="mini-badge">पहले बिना लॉगिन वोट, बाद में नाम जुड़ा</span>' : (v.linkedName ? '<span class="mini-badge">नाम बाद में जुड़ा</span>' : '')}
-            <span class="muted small">${esc(fullDate(v.at))}</span>
           </div>
           <div class="dvv-mid">
-            ${symbolSVG(v.candidateSymbol, 17)}
-            <span>को वोट दिया — <b>${esc(v.candidateName)}</b></span>
+            <span><b>${esc(v.userName)}</b> ने ${symbolSVG(v.candidateSymbol, 17)} <b>${esc(v.candidateName)}</b> को वोट दिया</span>
           </div>
-          <div class="dvv-dev muted small">डिवाइस: ${esc(v.deviceShort || '—')}</div>
+          <div class="dvv-dev muted small">${esc(fullDate(v.at))} · डिवाइस: ${esc(v.deviceShort || '—')}</div>
         </div>`).join('')}
     </div>` : `<div class="empty" style="padding:26px 14px">
         <h3 style="font-size:16px">इस चुनाव में अभी कोई वोट नहीं</h3>
@@ -2880,7 +3067,7 @@ function paintDevElection(d) {
           <h1>${esc(e.title)}</h1>
           <p class="muted">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)}</p>
           <p class="muted small">बनाने वाला: <b class="creator-tag">${esc(e.creatorName)}</b>
-            ${left ? ` · ⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b> बाकी` : ''}
+            ${left ? ` · ⏳ <b data-devleft="${e.remainingMs}">${esc(left)}</b>` : ''}
             ${e.closed ? ` · समाप्त ${esc(shortDate(e.closedAt || e.endsAt || Date.now()))}` : ''}</p>
         </div>
         <div class="dev-one-actions">
@@ -2910,6 +3097,13 @@ function paintDevElection(d) {
             </div>`).join('') || '<p class="muted small">उम्मीदवार नहीं</p>'}
         </div>
       </div>
+
+      ${(d.samePhoneVotes && d.samePhoneVotes.length) ? `
+      <div class="dev-warn">
+        ⚠️ <b>शक की जगह:</b> ${d.samePhoneVotes.length} फ़ोन से एक से ज़्यादा वोट दर्ज हुए हैं
+        (एक ही ब्राउज़र/इनकॉग्निटो से दोबारा वोट). हर फ़ोन पर: ${d.samePhoneVotes.map((x) => x.count).join(', ')} वोट।
+        बिना OTP इसे पूरी तरह रोका नहीं जा सकता — पर यहाँ पकड़ में आ जाता है।
+      </div>` : ''}
 
       <div class="dev-card">
         <div class="dev-card-head">
@@ -3663,26 +3857,77 @@ function parseHash() {
   return { parts: pathPart.split('/').filter(Boolean), query: new URLSearchParams(queryPart || '') };
 }
 
+/* 🛡️ किसी भी पेज में गड़बड़ी हो तो सफ़ेद/खाली पेज न दिखे — साफ़ संदेश + बटन */
+function safeRender(name, fn) {
+  try {
+    const out = fn();
+    if (out && typeof out.catch === 'function') {
+      return out.catch((e) => showPageError(name, e));
+    }
+    return out;
+  } catch (e) {
+    return showPageError(name, e);
+  }
+}
+
+function showPageError(name, e) {
+  try { console.warn('render error in', name, e); } catch (_) {}
+  const box = document.getElementById('app');
+  if (!box) return;
+  box.innerHTML = `
+  <section class="section"><div class="wrap wrap-narrow">
+    <div class="empty">
+      <div class="em-ico">${ICON.warn}</div>
+      <h3>यह पेज खुल नहीं पाया</h3>
+      <p>कोई तकनीकी गड़बड़ी हुई${name ? ' (' + esc(String(name)) + ')' : ''}। नीचे से फिर कोशिश करें — आपका डेटा सुरक्षित है।</p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-primary" id="errRetry">फिर कोशिश करें</button>
+        <a class="btn btn-ghost" href="#/">होम पर जाएँ</a>
+        <a class="btn btn-ghost" href="#/explore">सारे चुनाव</a>
+      </div>
+    </div>
+  </div></section>`;
+  const r = document.getElementById('errRetry');
+  if (r) r.addEventListener('click', () => { location.reload(); });
+}
+
+/* 🔎 सर्च/पुराने लिंक से आने वाले लोग /explore, /how जैसे पते पर आते हैं
+   (बिना #) — उन्हें सही पेज पर पहुँचा दो, खाली/404 पेज न दिखे। */
+(function normalizePathLink() {
+  try {
+    const path = location.pathname.replace(/^\/+|\/+$/g, '');
+    if (!path || /\.(html?|png|jpe?g|svg|css|js|json|ico|txt|webmanifest)$/i.test(path)) return;
+    if (location.hash && location.hash.length > 1) return;
+    const known = ['explore', 'how', 'login', 'create', 'settings', 'developer', 'disclaimer', 'terms', 'privacy'];
+    const first = path.split('/')[0].toLowerCase();
+    if (known.includes(first)) {
+      history.replaceState(null, '', '/' + '#' + '/' + path + location.search);
+    } else {
+      history.replaceState(null, '', '/' + '#/');
+    }
+  } catch (_) {}
+})();
+
 function route() {
   const { parts } = parseHash();
   selectedCandidate = null;
 
-  if (parts[0] === 'create') return renderCreate();
-  if (parts[0] === 'created' && parts[1]) return renderCreated(parts[1].toUpperCase());
-  if (parts[0] === 'explore') return renderExplore();
-  if (parts[0] === 'how') return renderHow();
-  if (parts[0] === 'login') return renderLogin();
-  if (parts[0] === 'disclaimer') return renderDisclaimer();
-  if (parts[0] === 'terms') return renderTerms();
-  if (parts[0] === 'privacy') return renderPrivacy();
-  if (parts[0] === 'developer' && parts[1] === 'e' && parts[2]) return renderDevElection(parts[2].toUpperCase());
-  if (parts[0] === 'developer') return renderDeveloper();
-  if (parts[0] === 'settings') return renderSettings(parts[1] || 'main');
-  if (parts[0] === 'e' && parts[1]) return renderElection(parts[1].toUpperCase());
-  return renderHome();
+  if (parts[0] === 'create') return safeRender('create', () => renderCreate());
+  if (parts[0] === 'created' && parts[1]) return safeRender('created', () => renderCreated(parts[1].toUpperCase()));
+  if (parts[0] === 'explore') return safeRender('explore', () => renderExplore());
+  if (parts[0] === 'how') return safeRender('how', () => renderHow());
+  if (parts[0] === 'login') return safeRender('login', () => renderLogin());
+  if (parts[0] === 'disclaimer') return safeRender('disclaimer', () => renderDisclaimer());
+  if (parts[0] === 'terms') return safeRender('terms', () => renderTerms());
+  if (parts[0] === 'privacy') return safeRender('privacy', () => renderPrivacy());
+  if (parts[0] === 'developer' && parts[1] === 'e' && parts[2]) return safeRender('developer', () => renderDevElection(parts[2].toUpperCase()));
+  if (parts[0] === 'developer') return safeRender('developer', () => renderDeveloper());
+  if (parts[0] === 'settings') return safeRender('settings', () => renderSettings(parts[1] || 'main'));
+  if (parts[0] === 'e' && parts[1]) return safeRender('election', () => renderElection(parts[1].toUpperCase()));
+  return safeRender('home', () => renderHome());
 }
 
-window.addEventListener('hashchange', () => { window.scrollTo({ top: 0 }); route(); });
+window.addEventListener('hashchange', () => { window.scrollTo({ top: 0 }); route(); setTimeout(startGlobalTicker, 60); });
 
 function bindNavTheme() {
   const btn = document.getElementById('navTheme');
@@ -3693,6 +3938,34 @@ function bindNavTheme() {
     toast(isDark ? 'लाइट मोड चालू' : 'डार्क मोड चालू', 'ok');
     if (state.route && state.route[0] === 'settings') render();
   });
+}
+
+/* =====================================================================
+   ⏱️ ग्लोबल काउंटडाउन — हर पेज पर हर सेकंड अपने आप बदलता है
+   (होम, खोजें, चुनाव पेज, मेरे चुनाव, डेवलपर पैनल — सब जगह)
+   ===================================================================== */
+let globalTickTimer = null;
+function startGlobalTicker() {
+  const scan = () => {
+    $$('[data-left],[data-devleft],[data-count-to]').forEach((el) => {
+      if (el.__jt) return;
+      const ms = Number(el.dataset.left != null ? el.dataset.left
+        : el.dataset.devleft != null ? el.dataset.devleft
+        : el.dataset.countTo) || 0;
+      el.__jt = { ms, at: Date.now() };
+    });
+  };
+  const tick = () => {
+    scan();
+    $$('[data-left],[data-devleft],[data-count-to]').forEach((el) => {
+      if (!el.__jt) return;
+      const left = el.__jt.ms - (Date.now() - el.__jt.at);
+      el.textContent = left > 0 ? fmtLeft(left) : 'समय पूरा';
+    });
+  };
+  if (globalTickTimer) clearInterval(globalTickTimer);
+  tick();
+  globalTickTimer = setInterval(tick, 1000);
 }
 
 async function boot() {
@@ -3706,9 +3979,20 @@ async function boot() {
   }
   renderNavAuth();
   await initDeviceId();
+  await initFingerprint();
   await refreshMe();
+  /* 🟢 इस फ़ोन से पहले लॉगिन हो चुका है? → अपने आप वही खाता */
+  if (!state.token) {
+    const auto = await tryAutoLogin();
+    if (auto.ok && auto.user && !auto.already) {
+      setTimeout(() => toast('स्वागत है, ' + auto.user.name + ' — आपका खाता पहचान लिया गया', 'ok'), 500);
+    } else if (auto.hint && auto.hint.name) {
+      savedNameHint = auto.hint.name;   /* लॉगिन पेज पर नाम पहले से भरा मिलेगा */
+    }
+  }
   renderNavAuth();
   route();
+  startGlobalTicker();
 }
 
 if (document.readyState === 'loading') {

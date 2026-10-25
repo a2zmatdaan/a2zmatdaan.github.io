@@ -82,4 +82,65 @@ fs.writeFileSync(path.join(PUB, 'api-base.js'), apiBaseJs, 'utf8');
 if (apiBaseEnv) console.log(`🔗 API base injected: ${apiBaseEnv}`);
 
 const kb = (Buffer.byteLength(html) / 1024).toFixed(1);
+/* =====================================================================
+   🔎 404.html — सर्च (Google) या पुराने लिंक से आने वाले लोग /explore, /how
+   जैसे पते पर पहुँचते हैं (बिना #)। GitHub Pages वहाँ अपना "Page not found"
+   दिखाता था — अब वही पेज सही जगह भेज देगा (और माफ़ी वाला साफ़ संदेश भी)।
+   ===================================================================== */
+const notFound = `<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>जनमत — होम पर भेज रहे हैं…</title>
+<meta name="robots" content="noindex" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f59e0b'/%3E%3Cpath d='M8 17l5 5 11-11' stroke='%23fff' stroke-width='4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    font-family:"Noto Sans Devanagari",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:radial-gradient(120% 90% at 50% 0%,#1b1a3a,#0d0c22 60%);color:#fff;padding:22px;text-align:center}
+  .card{max-width:430px;width:100%}
+  .mark{width:62px;height:62px;border-radius:18px;background:linear-gradient(140deg,#ffb020,#f97316);
+    display:flex;align-items:center;justify-content:center;margin:0 auto 18px;box-shadow:0 12px 30px rgba(249,115,22,.35)}
+  h1{font-size:21px;margin:0 0 10px;letter-spacing:-.02em}
+  p{color:#b9b8d4;font-size:14.5px;line-height:1.7;margin:0 0 20px}
+  a.btn{display:inline-block;padding:13px 22px;border-radius:14px;font-weight:800;text-decoration:none;
+    background:linear-gradient(135deg,#ffb020,#f97316);color:#241400;margin:5px}
+  a.ghost{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2)}
+  .spin{width:22px;height:22px;border:3px solid rgba(255,255,255,.25);border-top-color:#ffb020;
+    border-radius:50%;margin:0 auto 16px;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .small{font-size:12.5px;color:#8b8aa6;margin-top:18px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+    </div>
+    <div class="spin"></div>
+    <h1>जनमत — होम पर भेज रहे हैं…</h1>
+    <p>यह पेज नहीं मिला, इसलिए हम आपको <b>जनमत</b> के मुख्य पेज पर ले जा रहे हैं।<br>
+       अगर कुछ सेकंड में न खुले, तो नीचे के बटन से जाइए।</p>
+    <a class="btn" id="go" href="/">होम पर जाएँ</a>
+    <a class="btn ghost" href="/#/explore">सारे चुनाव देखें</a>
+    <p class="small">यह एक निजी, गैर-सरकारी सामुदायिक मतदान मंच है — सरकारी चुनाव से इसका कोई संबंध नहीं।</p>
+  </div>
+<script>
+  (function () {
+    var p = location.pathname.replace(/^\/+|\/+$/g, '');
+    var known = ['explore','how','login','create','settings','developer','disclaimer','terms','privacy'];
+    var first = (p.split('/')[0] || '').toLowerCase();
+    var target = known.indexOf(first) !== -1 ? ('/#' + '/' + p) : '/#/';
+    var go = document.getElementById('go');
+    if (go) go.setAttribute('href', target);
+    setTimeout(function () { location.replace(target); }, 400);
+  })();
+</script>
+</body>
+</html>`;
+fs.writeFileSync(path.join(__dirname, '404.html'), notFound, 'utf8');
+
 console.log(`✅ built index.html + public/index.html (${kb} KB, self-contained)`);
+console.log('✅ built 404.html (सर्च/पुराने लिंक → सही पेज)');

@@ -185,7 +185,7 @@ function seedDb() {
 
   // production me koi demo/fake data nahi — sirf khaali system
   if (!SEED_DEMO) {
-    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {}, deviceOwner: {} };
+    return { version: 2, createdAt: now, users: [], elections: [], devSessions: {}, deviceOwner: {}, fpOwner: {} };
   }
 
   const users = [];
@@ -437,6 +437,15 @@ function publicUser(u) {
    "एक डिवाइस = एक वोट" का नियम लागू रहता है। */
 function guestVoterId(req, bodyDevice) {
   return 'g:' + deviceKeyFrom(req, bodyDevice);
+}
+
+/* 🧬 फ़ोन की पहचान (fingerprint) — ब्राउज़र डेटा मिटाने/इनकॉग्निटो के बाद भी
+   वही फ़ोन पहचाना जा सके। यह सिर्फ़ "पहचानने" के लिए है, वोट रोकने के लिए
+   नहीं (एक ही मॉडल के दो असली फ़ोन का फिंगरप्रिंट एक जैसा निकल सकता है)। */
+function fpKeyFrom(req) {
+  const raw = clean(req.headers['x-fp'] || '', 200);
+  if (!/^[A-Za-z0-9_-]{16,200}$/.test(raw)) return null;
+  return 'f:' + sha256(raw).slice(0, 40);
 }
 
 /* 🟢 बिना लॉगिन किया गया वोट, बाद में उसी फ़ोन से लॉगिन करने पर
@@ -704,6 +713,12 @@ async function handleApi(req, res, pathname) {
       });
     }
     db.deviceOwner[device] = user.id;
+    /* 🧬 फिंगरप्रिंट भी इसी नाम से बाँध दो (डेटा मिटने पर पहचान बची रहे) */
+    const fp = fpKeyFrom(req);
+    if (fp) {
+      if (!db.fpOwner) db.fpOwner = {};
+      db.fpOwner[fp] = user.id;
+    }
 
     user.devices[device] = Date.now();
     if (Object.keys(user.devices).length > 40) {
@@ -721,6 +736,49 @@ async function handleApi(req, res, pathname) {
 
     await saveNow();
     return sendJson(res, 200, { user: publicUser(user), token, quota: quotaFor(user), adoptedVotes: adopted });
+  }
+
+  /* =====================================================================
+     🟢 अपने आप लॉगिन (auto-login)
+     इस फ़ोन से जो एक बार लॉगिन कर चुका है, उसे फिर से नाम न लिखना पड़े —
+     लॉगआउट, ब्राउज़र बंद, फ़ोन रीस्टार्ट के बाद भी वही खाता मिल जाए।
+     ब्राउज़र का डेटा पूरा मिट जाए तो फिंगरप्रिंट से सिर्फ़ "सुझाव" मिलता है
+     (एक टैप में लॉगिन) — बिना पूछे किसी और के खाते में नहीं डालते।
+     ===================================================================== */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'auto') {
+    const body = await readBody(req);
+    const device = deviceKeyFrom(req, body.deviceId);
+    const fp = fpKeyFrom(req);
+    if (!db.deviceOwner) db.deviceOwner = {};
+    if (!db.fpOwner) db.fpOwner = {};
+
+    const byDevice = db.deviceOwner[device];
+    const byFp = fp ? db.fpOwner[fp] : null;
+    const ownerId = byDevice || byFp;
+    const owner = ownerId ? db.users.find((u) => u.id === ownerId) : null;
+    if (!owner || owner.deletedAt) {
+      return sendJson(res, 200, { ok: false, hint: null });
+    }
+
+    /* डेटा मिट चुका है (device नया, सिर्फ़ फिंगरप्रिंट मिला) → पूछकर लॉगिन */
+    if (!byDevice) {
+      return sendJson(res, 200, {
+        ok: false,
+        hint: { name: owner.name, via: 'fingerprint' },
+        message: 'इस फ़ोन से पहले "' + owner.name + '" नाम से लॉगिन हुआ था।',
+      });
+    }
+
+    /* यही फ़ोन — सीधे लॉगिन (बिना लॉगिन वाले वोट भी नाम से जोड़ दो) */
+    adoptGuestVotes(owner, device);
+    const token = rid(24);
+    owner.tokens[token] = Date.now();
+    owner.lastLoginAt = Date.now();
+    const keep = Object.entries(owner.tokens).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    owner.tokens = Object.fromEntries(keep);
+    if (fp) db.fpOwner[fp] = owner.id;
+    await saveNow();
+    return sendJson(res, 200, { ok: true, user: publicUser(owner), token, quota: quotaFor(owner), auto: true });
   }
 
   /* ---------- device rebind: is mobile ka na
@@ -752,6 +810,8 @@ async function handleApi(req, res, pathname) {
 
     delete db.deviceOwner[device];
     if (owner && owner.devices) delete owner.devices[device];
+    /* फिंगरप्रिंट की बाँध भी हटाओ, वरना नाम बदलने के बाद भी पुराना नाम अटकेगा */
+    if (db.fpOwner) Object.keys(db.fpOwner).forEach((k) => { if (db.fpOwner[k] === ownerId) delete db.fpOwner[k]; });
     await saveNow();
     return sendJson(res, 200, { ok: true, freedFrom: realOld ? owner.name : null });
   }
@@ -922,6 +982,28 @@ async function handleApi(req, res, pathname) {
         election: publicElection(election, { id: voterId, name: voterName }),
       });
     }
+    /* 🧬 इस फ़ोन से इस चुनाव में पहले ही वोट हो चुका है? (इनकॉग्निटो/दूसरा ब्राउज़र)
+       — पहले रोकते हैं और साफ़ संदेश देते हैं। अगर सच में दूसरा व्यक्ति है
+       (एक ही मॉडल का दूसरा फ़ोन), तो वह "मैं दूसरा व्यक्ति हूँ" दबाकर वोट कर सकता है
+       — और वह वोट डेवलपर को अलग से दिख जाता है। */
+    const fpNow = fpKeyFrom(req);
+    const fpAlready = !!(fpNow && election.fpVotes && election.fpVotes[fpNow] && election.fpVotes[fpNow].length);
+    if (fpAlready && body.overrideSamePhone !== true) {
+      return sendJson(res, 409, {
+        error: 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।',
+        code: 'SAME_PHONE_VOTED',
+        allowOverride: true,
+        election: publicElection(election, { id: voterId, name: voterName }),
+      });
+    }
+    if (fpAlready && body.overrideSamePhone === true && election.votes[voterId]) {
+      /* एक ही व्यक्ति (खाता) दोबारा — यह कभी नहीं */
+      return sendJson(res, 409, {
+        error: 'आप इस चुनाव में पहले ही वोट कर चुके हैं।',
+        code: 'ALREADY_VOTED',
+      });
+    }
+
     const dev = election.devices[device];
     if (dev) {
       return sendJson(res, 409, {
@@ -931,8 +1013,16 @@ async function handleApi(req, res, pathname) {
       });
     }
 
-    election.votes[voterId] = { c: cand.id, at: Date.now(), device, guest: !viewer };
+    const fpV = fpKeyFrom(req);
+    election.votes[voterId] = { c: cand.id, at: Date.now(), device, guest: !viewer, fp: fpV, samePhoneOverride: (fpAlready && body.overrideSamePhone === true) };
     election.devices[device] = { userId: voterId, at: Date.now() };
+    /* 🧬 एक ही फ़ोन से कई वोट? — डेवलपर को दिखाने के लिए गिनते हैं (रोकते नहीं,
+       वरना एक ही मॉडल के दो असली फ़ोन का सही वोट भी रुक जाए) */
+    if (fpV) {
+      if (!election.fpVotes) election.fpVotes = {};
+      if (!election.fpVotes[fpV]) election.fpVotes[fpV] = [];
+      if (!election.fpVotes[fpV].includes(voterId)) election.fpVotes[fpV].push(voterId);
+    }
     await saveNow();
 
     // 🔴 real-time: election subscribers ko naya tally + developer ko live vote
@@ -1085,6 +1175,9 @@ async function handleApi(req, res, pathname) {
         if (db.deviceOwner[d] === viewer.id) delete db.deviceOwner[d];
       });
     }
+    if (db.fpOwner) {
+      Object.keys(db.fpOwner).forEach((k) => { if (db.fpOwner[k] === viewer.id) delete db.fpOwner[k]; });
+    }
 
     await saveNow();
     broadcastDev('user-deleted', { userId: viewer.id, at: Date.now() });
@@ -1227,6 +1320,7 @@ async function handleApi(req, res, pathname) {
           timeUp: isTimeUp(e),
           leading: t.candidates[0] || null,
           winner: e.closed ? (t.candidates[0] || null) : null,
+          samePhoneVotes: Object.values(e.fpVotes || {}).filter((l) => l.length > 1).length,
         };
       });
 
@@ -1294,7 +1388,11 @@ async function handleApi(req, res, pathname) {
         };
       })
       .sort((a, b) => b.at - a.at);
+    const samePhone = Object.entries(e.fpVotes || {})
+      .filter(([, list]) => list.length > 1)
+      .map(([fp, list]) => ({ fpShort: String(fp).slice(0, 12), count: list.length }));
     return sendJson(res, 200, {
+      samePhoneVotes: samePhone,
       election: {
         ...publicElection(e, null),
         creatorName: creator ? creator.name : 'अज्ञात',
@@ -1406,7 +1504,7 @@ function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, x-user-token, x-dev-token, x-device-id'
+    'Content-Type, x-user-token, x-dev-token, x-device-id, x-fp'
   );
   res.setHeader('Access-Control-Max-Age', '86400');
   if (!allowAll) res.setHeader('Vary', 'Origin');

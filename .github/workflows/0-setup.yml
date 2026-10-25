@@ -1,16 +1,19 @@
 name: 0 · Auto Setup (zip → live site)
 
 # ============================================================================
-#  जनमत — एक ही Action सब कुछ कर देता है:
-#   1) repo में पड़ी ZIP को खोलता है और प्रोजेक्ट root में लगा देता है
-#   2) index.html build करता है
-#   3) 15 smoke tests चलाता है (असली सर्वर पर)
-#   4) GitHub Pages अपने आप चालू करके site deploy कर देता है
-#   5) Render का one-click deploy link summary में दिखा देता है
+#  जनमत — v2 (FIXED) : पिछली बार यही step fail हुआ था → "commit + push"
 #
-#  आपको सिर्फ़ 2 काम:
-#   (क) repo में janmat-upload.zip upload करें
-#   (ख) यह फ़ाइल .github/workflows/0-setup.yml नाम से बनाएँ (paste)
+#  क्यों fail हुआ था?
+#   ZIP के अंदर .github/workflows/0-setup.yml का नया version भी था। commit में
+#   workflow फ़ाइल बदलने की कोशिश हुई, और token के पास `workflows: write`
+#   permission नहीं थी → GitHub ने push reject कर दिया।
+#
+#  अब क्या ठीक किया:
+#   1) permissions में `workflows: write` जोड़ा
+#   2) commit में .github/workflows को छुआ ही नहीं जाता (आपका workflow सुरक्षित)
+#   3) push fail हो तो भी साइट live हो जाती है (Pages artifact से deploy)
+#   4) push fail हो तो असली error summary में दिखता है + पूरा प्रोजेक्ट
+#      `janmat-project.zip` artifact के रूप में download के लिए तैयार रहता है
 # ============================================================================
 
 on:
@@ -20,8 +23,9 @@ on:
 
 permissions:
   contents: write     # zip खोलकर commit करने के लिए
-  pages: write        # Pages चालू करने / deploy करने के लिए
-  id-token: write     # Pages deploy के लिए ज़रूरी
+  workflows: write    # ⬅️ यही missing था (workflow फ़ाइल बदलने की परमिशन)
+  pages: write        # Pages deploy के लिए
+  id-token: write
 
 concurrency:
   group: janmat-autosetup
@@ -37,8 +41,11 @@ jobs:
     timeout-minutes: 15
     outputs:
       built: ${{ steps.unpack.outputs.found }}
+      pushed: ${{ steps.push.outcome }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -69,8 +76,7 @@ jobs:
             unzip -q -o "$z" -d "/tmp/jx/${z%.zip}"
           done
 
-          # अगर repo में एक से ज़्यादा zip हैं (जैसे पुरानी janmat-v2.zip भी पड़ी हो),
-          # तो सबसे पूरा/नया प्रोजेक्ट चुनो — स्कोर: server.js + build.js + api-base.js
+          # एक से ज़्यादा zip हों (पुरानी janmat-v2.zip भी पड़ी हो) तो सबसे पूरा चुनो
           src=""; best=0
           while IFS= read -r f; do
             [ -n "$f" ] || continue
@@ -89,30 +95,35 @@ jobs:
             exit 0
           fi
           echo "✅ सोर्स फ़ोल्डर: $src (स्कोर $best)"
-          if [ ${#zips[@]} -gt 1 ]; then
-            echo "ℹ️ ${#zips[@]} zip मिलीं — सबसे नया/पूरा प्रोजेक्ट चुना गया।"
-          fi
 
-          # सारी चीज़ें root में copy (छिपी फ़ाइलें भी)
           shopt -s dotglob
           cp -R "$src"/. .
           shopt -u dotglob
 
-          # zip फ़ाइलें हटाओ (अब ज़रूरत नहीं)
           for z in "${zips[@]}"; do rm -f "$z"; done
           echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - name: 🛡️ आपकी workflow फ़ाइलें वापस जैसी थीं (overwrite नहीं)
+        if: steps.unpack.outputs.found == 'true'
+        shell: bash
+        run: |
+          # ZIP में जो .github/workflows आया, उसे अनदेखा करके repo वाला रखो
+          if [ -d .github/workflows ]; then
+            git checkout -- .github/workflows 2>/dev/null || true
+            git clean -fdq .github/workflows 2>/dev/null || true
+          fi
+          ls -1 .github/workflows || true
 
       - name: 🏗️ Build (index.html) + server URL inject
         if: steps.unpack.outputs.found == 'true'
         shell: bash
         env:
-          # GitHub → Settings → Variables → API_BASE  (Render URL डालने पर
-          # github.io वाली साइट भी उसी साझा सर्वर से डेटा लेगी)
           JANMAT_API_BASE: ${{ vars.API_BASE }}
         run: |
           set -euo pipefail
           if [ -f build.js ]; then node build.js; else echo "build.js नहीं मिला — skip"; fi
           ls -lh index.html 2>/dev/null || true
+          echo "--- api-base.js ---"; cat api-base.js 2>/dev/null || true
 
       - name: 🧪 Smoke test (asli server + 15 checks)
         if: steps.unpack.outputs.found == 'true'
@@ -128,25 +139,83 @@ jobs:
             echo "smoke.sh नहीं मिला — skip"
           fi
 
-      - name: 💾 बदलाव commit + push
+      - name: 📁 Pages के लिए deploy फ़ोल्डर
         if: steps.unpack.outputs.found == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf _site && mkdir -p _site
+          for f in index.html config.js api-base.js .nojekyll; do
+            [ -e "$f" ] && cp "$f" _site/ || true
+          done
+          ls -lh _site
+
+      - name: ⬆️ Pages artifact
+        if: steps.unpack.outputs.found == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: 💾 बदलाव commit + push
+        id: push
+        if: steps.unpack.outputs.found == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
           rm -f data/db.json
           git config user.name  "janmat-bot"
           git config user.email "janmat-bot@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "✅ कुछ बदलने की ज़रूरत नहीं — सब पहले से ठीक है।"
-          else
-            git commit -m "chore(auto): unzip + build by GitHub Action"
-            git push
-            echo "✅ बदलाव push हो गए।"
+          git config core.fileMode false   # सिर्फ़ परमिशन बदलने से फ़र्ज़ी commit न बने
+
+          # ⚠️ .github/workflows और _site (build artifact) commit से बाहर
+          if ! git add -A -- . ':(exclude).github/workflows' ':(exclude)_site'; then
+            echo "❌ git add fail हुआ — कुछ भी commit नहीं हुआ"
+            exit 1
           fi
 
+          if git diff --cached --quiet; then
+            echo "✅ कुछ बदलने की ज़रूरत नहीं — सब पहले से repo में है।"
+            exit 0
+          fi
+
+          git commit -m "chore(auto): unzip + build by GitHub Action"
+
+          if git push; then
+            echo "✅ Push हो गया — repo में पूरा प्रोजेक्ट आ गया।"
+            exit 0
+          fi
+
+          # कभी-कभी remote आगे होता है — rebase करके एक बार फिर
+          echo "↻ पहला push नहीं लगा — pull --rebase करके दोबारा कोशिश…"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          if git push; then
+            echo "✅ दूसरी कोशिश में push हो गया।"
+            exit 0
+          fi
+
+          echo "❌ Push नहीं हो पाया — कारण नीचे है:"
+          git push 2>&1 | tail -20 | tee push_error.txt || true
+          exit 1
+
+      - name: 🧰 (fallback) पूरा प्रोजेक्ट zip में — manual upload के लिए
+        if: steps.unpack.outputs.found == 'true' && steps.push.outcome == 'failure'
+        shell: bash
+        run: |
+          rm -f /tmp/janmat-project.zip
+          zip -qr /tmp/janmat-project.zip . -x ".git/*" -x "*.DS_Store" -x "data/db.json" -x "_site/*" || true
+          ls -lh /tmp/janmat-project.zip
+
+      - name: ⬆️ (fallback) artifact upload
+        if: steps.unpack.outputs.found == 'true' && steps.push.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: janmat-project
+          path: /tmp/janmat-project.zip
+          retention-days: 7
+
   # --------------------------------------------------------------------------
-  # 2) GitHub Pages चालू करो और deploy करो
+  # 2) GitHub Pages deploy (push fail होने पर भी साइट live हो जाए)
   # --------------------------------------------------------------------------
   deploy:
     name: GitHub Pages deploy
@@ -157,17 +226,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-
-      - name: 🔧 Pages चालू करो (पहली बार अपने आप)
-        continue-on-error: true
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: 🔁 Pages का स्रोत = GitHub Actions (पहले से चालू हो तो भी ठीक)
+      - name: 🔧 Pages को Actions से deploy करने के लिए सेट करो
         continue-on-error: true
         shell: bash
         env:
@@ -175,62 +234,73 @@ jobs:
         run: |
           gh api -X POST "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow >/dev/null 2>&1 \
           || gh api -X PUT "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow >/dev/null 2>&1 \
-          || echo "ℹ️ Pages स्रोत पहले से सेट है — जारी रखते हैं"
-
-      - name: 📁 deploy फ़ोल्डर तैयार करो
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf _site && mkdir -p _site
-          for f in index.html config.js api-base.js .nojekyll; do
-            [ -e "$f" ] && cp "$f" _site/ || true
-          done
-          if [ ! -f _site/index.html ] && [ -f build.js ]; then
-            node build.js && cp index.html _site/ || true
-          fi
-          ls -lh _site
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
+          || echo "ℹ️ Pages स्रोत सेट नहीं हो सका — नीचे deploy कोशिश करेगा"
 
       - id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
 
   # --------------------------------------------------------------------------
-  # 3) आख़िर में साफ़ निर्देश + Render का link
+  # 3) हमेशा चलने वाला summary — साफ़ बताता है क्या हुआ
   # --------------------------------------------------------------------------
   summary:
-    name: अगले कदम (Render)
-    needs: [setup]
-    if: needs.setup.outputs.built == 'true'
+    name: नतीजा और अगले कदम
+    needs: [setup, deploy]
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: 📋 Summary
         shell: bash
+        env:
+          BUILT: ${{ needs.setup.outputs.built }}
+          PUSHED: ${{ needs.setup.outputs.pushed }}
+          REPO: ${{ github.repository }}
         run: |
-          REPO="${{ github.repository }}"
-          OWNER="${REPO%%/*}"
-          NAME="${REPO##*/}"
+          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
           if [ "$NAME" = "${OWNER}.github.io" ]; then
             PAGES="https://${OWNER}.github.io/"
           else
             PAGES="https://${OWNER}.github.io/${NAME}/"
           fi
+
           {
-            echo "## ✅ साइट तैयार है"
+            echo "## 📋 नतीजा"
             echo ""
-            echo "### 🌐 आपकी साइट (GitHub Pages)"
+            echo "| चीज़ | स्थिति |"
+            echo "|---|---|"
+            if [ "$BUILT" = "true" ]; then
+              echo "| ZIP खुली + build | ✅ |"
+            else
+              echo "| ZIP खुली + build | ❌ (zip नहीं मिली या server.js/index.html नहीं था) |"
+            fi
+            if [ "$PUSHED" = "success" ]; then
+              echo "| Repo में फ़ाइलें commit | ✅ |"
+            else
+              echo "| Repo में फ़ाइलें commit | ⚠️ नहीं हो पाया (साइट फिर भी live होगी) |"
+            fi
             echo ""
-            echo "**${PAGES}**"
+            echo "### 🌐 आपकी साइट"
             echo ""
-            echo "> पहली बार खुलने में 1–2 मिनट लग सकते हैं।"
+            echo "**${PAGES}**  ·  डेवलपर पैनल: \`${PAGES}#/developer\` (पासवर्ड \`${{ vars.DEV_PASSWORD || 'KHOHDEEG' }}\`)"
             echo ""
+            echo "> पहली बार 1–2 मिनट लग सकते हैं।"
+            echo ""
+            if [ "$PUSHED" != "success" ]; then
+              echo "---"
+              echo ""
+              echo "### ⚠️ Push क्यों नहीं हुआ — इसे ठीक करें (20 सेकंड)"
+              echo ""
+              echo "**Settings → Actions → General → Workflow permissions** →"
+              echo "**\"Read and write permissions\"** चुनें → **Save** → फिर"
+              echo "**Actions → 0 · Auto Setup → Run workflow**."
+              echo ""
+              echo "अगर फिर भी न हो, तो इस run के नीचे **janmat-project** artifact download करें —"
+              echo "उस zip को repo में upload कर देने से सब चल जाएगा।"
+              echo ""
+            fi
             echo "---"
             echo ""
-            echo "### 🗳️ अब असली साझा वोटिंग चालू करें (सिर्फ़ 2 कदम)"
-            echo ""
-            echo "**कदम 1 — Render पर एक क्लिक:**"
+            echo "### 🗳️ असली साझा वोटिंग चालू करें (Render)"
             echo ""
             echo "👉 [Render पर Deploy करें](https://render.com/deploy?repo=https://github.com/${REPO})"
             echo ""
@@ -238,30 +308,15 @@ jobs:
             echo "https://render.com/deploy?repo=https://github.com/${REPO}"
             echo '```'
             echo ""
-            echo "Render में **GitHub से login** → **Apply** दबाएँ (कार्ड नहीं चाहिए)।"
-            echo "2–3 मिनट में URL मिलेगा, जैसे \`https://janmat-xxxx.onrender.com\`"
+            echo "GitHub से login → **Apply** → 2–3 मिनट में URL मिलेगा।"
             echo ""
-            echo "**कदम 2 — वह URL यहाँ डालें (एक बार):**"
-            echo ""
-            echo "**Settings → Secrets and variables → Actions → Variables → New repository variable**"
+            echo "फिर **Settings → Secrets and variables → Actions → Variables → New variable**:"
             echo ""
             echo "| Name | Value |"
             echo "|---|---|"
-            echo "| \`API_BASE\` | \`https://janmat-xxxx.onrender.com\` |"
+            echo "| \`API_BASE\` | आपका Render URL (जैसे \`https://janmat-xxxx.onrender.com\`) |"
+            echo "| \`SITE_URL\` | वही URL (Render को जगाए रखने के लिए — ज़रूरी नहीं) |"
             echo ""
-            echo "फिर **Actions → 0 · Auto Setup → Run workflow** दबाएँ।"
-            echo "अब ${PAGES} भी उसी साझा सर्वर से चलेगी — सबको एक ही चुनाव दिखेगा।"
-            echo ""
-            echo "---"
-            echo ""
-            echo "### 🔔 (ज़रूरी नहीं) Render को जगाए रखना"
-            echo ""
-            echo "एक और variable जोड़ें: \`SITE_URL\` = आपका Render URL —"
-            echo "हर 14 मिनट में अपने आप जगता रहेगा (\`.github/workflows/2-keepalive.yml\`)।"
-            echo ""
-            echo "### 🔑 डेवलपर पैनल"
-            echo ""
-            echo "\`${PAGES}#/developer\` · पासवर्ड: \`${{ vars.DEV_PASSWORD || 'KHOHDEEG' }}\`"
-            echo ""
-            echo "> पासवर्ड बदलने के लिए repo variable \`DEV_PASSWORD\` सेट करें।"
+            echo "उसके बाद **Actions → 0 · Auto Setup → Run workflow** एक बार फिर दबाएँ।"
           } >> "$GITHUB_STEP_SUMMARY"
+          

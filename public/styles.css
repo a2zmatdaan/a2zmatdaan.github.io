@@ -720,6 +720,22 @@ select {
 .login-page .login-rules { background: #faf9ff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
 .login-done { text-align: center; padding: 34px 24px; }
 
+/* naam + password login (tabs, recovery) */
+#inlineLoginForm { flex-direction: column; align-items: stretch; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #f0eefc; padding: 5px; border-radius: 12px; border: 1px solid var(--line); }
+.auth-tab { border: 0; background: transparent; padding: 10px; border-radius: 9px; font: inherit; font-weight: 800; color: var(--muted); cursor: pointer; }
+.auth-tab.active { background: #fff; color: var(--indigo); box-shadow: var(--shadow-sm); }
+.linklike { margin-top: 12px; background: none; border: 0; color: var(--indigo); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; text-decoration: underline; }
+.recover-box { display: flex; flex-direction: column; gap: 9px; max-width: 480px; margin: 12px auto 0; text-align: left; background: #fff8ec; border: 1px solid #f3ddb4; border-radius: 14px; padding: 14px; }
+.recover-box[hidden] { display: none; }
+.recovery-show { display: flex; flex-direction: column; gap: 7px; align-items: center; background: #fff8ec; border: 1px solid #f3ddb4; border-radius: 14px; padding: 14px; margin-top: 12px; font-size: 13.5px; color: #7a4b00; }
+.recovery-show code { font-size: 21px; font-weight: 800; letter-spacing: .08em; color: var(--ink); background: #fff; border: 1px dashed #e5b93e; border-radius: 10px; padding: 7px 14px; }
+.pw-change { display: flex; flex-direction: column; gap: 9px; max-width: 420px; }
+:root[data-theme="dark"] .auth-tabs { background: #151a34; border-color: #2a3055; }
+:root[data-theme="dark"] .auth-tab.active { background: #232a52; color: #fff; }
+:root[data-theme="dark"] .recover-box, :root[data-theme="dark"] .recovery-show { background: #241d10; border-color: #5c4516; color: #f0d9a0; }
+:root[data-theme="dark"] .recovery-show code { background: #151a34; color: #fff; }
+
 /* legal strip */
 .legal-strip {
   display: flex; gap: 10px; align-items: flex-start; margin-top: 18px;
@@ -827,6 +843,13 @@ select {
 }
 .dev-page .btn-ghost { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.2); color: #fff; }
 .dev-page .btn-ghost:hover { background: rgba(255,255,255,.18); }
+/* FIX (light mode): upar wala safed-text style sirf dark band ke liye tha, par wo
+   safed dev-card ke andar wale buttono par bhi lag jata tha — isiliye light mode
+   me shikayat wale "हटाओ / हल हुई" button safed-par-safed hokar dikhte hi nahi the
+   (dark mode me neeche wala dark rule jeet jata tha, isliye wahan dikhte the).
+   Ab card ke andar ke button hamesha card ke rang ke hisab se saaf dikhenge. */
+.dev-page .dev-card .btn-ghost { background: #fff; border-color: var(--line); color: var(--ink); box-shadow: var(--shadow-sm); }
+.dev-page .dev-card .btn-ghost:hover { background: #fbfaff; border-color: #cfcde4; }
 
 .dev-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px; }
 .dev-stat { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 15px; text-align: center; box-shadow: var(--shadow-sm); }
@@ -1655,3 +1678,107 @@ main#app { flex: 1 0 auto; }
   transition: width .35s ease;
 }
 :root[data-theme="light"] .meter { background: rgba(0, 0, 0, .12); }
+
+/* =====================================================================
+   v8 — Username + PIN लॉगिन, पुराना खाता, appeal और username-जाँच
+   ===================================================================== */
+.auth-tabs-3 { grid-template-columns: repeat(3, 1fr); }
+#inlineLoginForm #authLoginFields,
+#inlineLoginForm #authRegisterFields,
+#inlineLoginForm #authOldFields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  text-align: left;
+}
+#inlineLoginForm #authLoginFields[hidden],
+#inlineLoginForm #authRegisterFields[hidden],
+#inlineLoginForm #authOldFields[hidden] { display: none !important; }
+.auth-label {
+  display: block;
+  margin-top: 3px;
+  font-size: 12.8px;
+  font-weight: 800;
+  color: var(--ink-2, var(--ink));
+}
+.auth-help {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f3f1ff;
+  color: var(--ink-2, var(--ink));
+  font-size: 13px;
+  line-height: 1.55;
+}
+.username-status {
+  min-height: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.username-status:empty { min-height: 0; }
+.u-ok { color: #137333; }
+.u-bad { color: #b3261e; }
+.u-wait { color: var(--muted); font-weight: 600; }
+.u-sugs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.username-suggestion {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--indigo);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12.8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.username-suggestion:hover { border-color: var(--indigo); background: var(--indigo-soft, #f0eefc); }
+.auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 18px;
+}
+.recover-box h4 { margin: 0; font-size: 15.5px; }
+.recover-box h5 { margin: 4px 0 0; font-size: 14px; }
+.recover-box select,
+.recover-box textarea { width: 100%; }
+.recover-box textarea { resize: vertical; min-height: 72px; }
+.appeal-box { background: #f6fbff; border-color: #c7e3f5; }
+.appeal-status-box {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.appeal-result {
+  font-size: 13.4px;
+  line-height: 1.6;
+}
+.appeal-result:empty { display: none; }
+.appeal-result .recovery-show { margin-top: 4px; text-align: center; }
+.username-modal { max-width: 520px; }
+.username-modal input { width: 100%; margin-top: 8px; }
+.username-modal .username-status { margin-top: 7px; text-align: left; }
+.dev-application input[type="text"] { width: 100%; }
+.dev-application input[type="radio"] { accent-color: var(--indigo); }
+:root[data-theme="dark"] .auth-help { background: #1d2345; color: #dfe3ff; }
+:root[data-theme="dark"] .u-ok { color: #7be495; }
+:root[data-theme="dark"] .u-bad { color: #ff9a94; }
+:root[data-theme="dark"] .username-suggestion { background: #171c38; color: #cdd3ff; border-color: #343b68; }
+:root[data-theme="dark"] .appeal-box { background: #111a2a; border-color: #28445f; color: #d9ecff; }
+@media (max-width: 430px) {
+  .auth-tabs-3 .auth-tab { padding: 9px 4px; font-size: 13px; }
+  .auth-links { flex-direction: column; gap: 0; }
+  .recovery-show code { font-size: 18px; max-width: 100%; overflow-wrap: anywhere; }
+}

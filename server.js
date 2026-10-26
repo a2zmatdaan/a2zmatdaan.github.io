@@ -4,7 +4,7 @@
    जनमत (Janmat) — server v2
    ---------------------------------------------------------------------
    Features
-   • Naam-se login (no password for users)
+   • Naam + Unique Username + PIN login (v8 — bina mobile/email; har username duniya me ek)
    • 1 user = 2 chunav / din (IST calendar day)
    • 1 device = 1 vote per election  (device fingerprint + server IP fallback)
    • Creator & voter identity sirf developer dekh sakta hai
@@ -75,6 +75,107 @@ function nameKey(name) {
 
 const RESERVED_NAMES = new Set(['developer', 'dev', 'admin', 'administrator', 'janmat', 'moderator', 'root']);
 
+/* =====================================================================
+   🔐 नाम + पासवर्ड सुरक्षा (v7.1)
+   • पासवर्ड/रिकवरी कोड कभी plain नहीं रखा जाता — scrypt hash + salt।
+   • एक जैसे नाम के कई खाते रह सकते हैं; पहचान पासवर्ड से होती है।
+   • मोबाइल नंबर/ईमेल/OTP का इस्तेमाल बिल्कुल नहीं होता।
+   ===================================================================== */
+const PW_MIN = 6;
+const PW_MAX = 64;
+
+function hashSecret(secret) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(secret), salt, 64).toString('hex');
+  return 'scrypt:' + salt + ':' + hash;
+}
+function verifySecret(secret, stored) {
+  try {
+    const parts = String(stored || '').split(':');
+    if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+    const expected = Buffer.from(parts[2], 'hex');
+    const got = crypto.scryptSync(String(secret), parts[1], 64);
+    return expected.length === got.length && crypto.timingSafeEqual(expected, got);
+  } catch (_) { return false; }
+}
+function validateName(rawName) {
+  const name = clean(rawName, 30);
+  if (!name) return { error: 'अपना नाम लिखें।' };
+  if (name.length < 2) return { error: 'नाम कम से कम 2 अक्षरों का होना चाहिए।' };
+  if (!/^[\p{L}\p{M}\p{N} .'_-]+$/u.test(name)) {
+    return { error: 'नाम में सिर्फ अक्षर, अंक, स्पेस और . \' _ - चलेंगे।' };
+  }
+  if (RESERVED_NAMES.has(nameKey(name))) {
+    return { error: 'यह नाम आरक्षित है, कृपया दूसरा नाम चुनें।' };
+  }
+  return { name };
+}
+function validatePassword(password, name) {
+  const pw = String(password == null ? '' : password);
+  if (pw.length < PW_MIN) return { error: 'पासवर्ड कम से कम ' + PW_MIN + ' अक्षरों का रखें।' };
+  if (pw.length > PW_MAX) return { error: 'पासवर्ड ज़्यादा से ज़्यादा ' + PW_MAX + ' अक्षरों का रखें।' };
+  if (!pw.trim()) return { error: 'पासवर्ड खाली नहीं हो सकता।' };
+  if (name && nameKey(pw) === nameKey(name)) return { error: 'पासवर्ड अपने नाम जैसा न रखें — कोई अलग गुप्त शब्द चुनें।' };
+  return { password: pw };
+}
+
+/* 🔢 गुप्त PIN — सिर्फ़ 6 से 10 अंक (नया खाता/PIN बदलते समय यही नियम;
+   पुराने बने पासवर्ड लॉगिन में वैसे ही चलेंगे, उन पर यह नियम लागू नहीं) */
+const COMMON_PINS = new Set(['123456','654321','1234567','12345678','123456789','1234567890','987654','9876543210','112233','121212','123123','111111','000000','102030','246810','135790','5201314']);
+function validatePin(pin, username) {
+  const s = String(pin == null ? '' : pin);
+  if (!/^[0-9]{6,10}$/.test(s)) return { error: 'PIN सिर्फ़ 6 से 10 अंकों का रखें (सिर्फ़ नंबर 0–9)।' };
+  if (/^([0-9])\1+$/.test(s)) return { error: 'PIN में सारे अंक एक जैसे न रखें — कुछ अलग चुनें।' };
+  let asc = true, desc = true;
+  for (let i = 1; i < s.length; i++) {
+    const d = Number(s[i]) - Number(s[i - 1]);
+    if (d !== 1) asc = false;
+    if (d !== -1) desc = false;
+  }
+  if (asc || desc || COMMON_PINS.has(s)) return { error: 'यह PIN बहुत आम है (जैसे 123456) — कोई ऐसा नंबर चुनें जो सिर्फ़ आपको याद रहे।' };
+  if (username && String(username).includes(s)) return { error: 'PIN अपने username जैसा न रखें।' };
+  return { password: s };
+}
+
+/* 👤 Username — दुनिया भर में एक, हमेशा के लिए उसी खाते का */
+const RESERVED_USERNAMES = new Set(['developer','dev','admin','administrator','janmat','a2zjanmat','teamjanmat','janmat_team','moderator','root','support','help','official','election','vote','electioncommission','jansunwai','pawan_admin']);
+function normalizeUsername(raw) {
+  return String(raw == null ? '' : raw).trim().toLowerCase().replace(/^@+/, '').replace(/\s+/g, '_');
+}
+function validateUsername(raw) {
+  const u = normalizeUsername(raw);
+  if (!u) return { error: 'अपना username चुनें — यही आपकी असली login-ID होगी।' };
+  if (!/^[a-z][a-z0-9_]{2,19}$/.test(u)) {
+    return { error: 'Username 3–20 अक्षरों का रखें: शुरुआत अंग्रेज़ी अक्षर (a–z) से, फिर अक्षर, अंक या _ चलेंगे (जैसे pawan_verma)।' };
+  }
+  if (u.includes('__') || u.endsWith('_')) return { error: 'Username में लगातार दो _ या अंत में _ न रखें।' };
+  if (RESERVED_USERNAMES.has(u)) return { error: 'यह username आरक्षित है, कृपया दूसरा चुनें।' };
+  return { username: u };
+}
+function maskUsername(u) {
+  const s = String(u || '');
+  if (s.length <= 3) return s ? s[0] + '***' : null;
+  return s.slice(0, 2) + '***' + s.slice(-2);
+}
+
+const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function makeRecoveryCode() {
+  let s = '';
+  for (let i = 0; i < 12; i++) s += RECOVERY_ALPHABET[crypto.randomBytes(1)[0] % RECOVERY_ALPHABET.length];
+  return s.slice(0, 4) + '-' + s.slice(4, 8) + '-' + s.slice(8, 12);
+}
+function normalizeRecovery(code) {
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function setPasswordAndRecovery(user, password) {
+  const code = makeRecoveryCode();
+  user.pwHash = hashSecret(password);
+  user.pwSetAt = Date.now();
+  user.recoveryHash = hashSecret(normalizeRecovery(code));
+  user.recoverySetAt = Date.now();
+  return code;
+}
+
 const SYMBOL_IDS = [
   'diya', 'sunflower', 'tractor', 'bicycle', 'wheat', 'bat', 'book', 'star', 'hand', 'house',
   'bell', 'umbrella', 'drum', 'flag', 'bulb', 'tree', 'fish', 'kite', 'leaf', 'clock', 'key',
@@ -127,6 +228,27 @@ function migrateDb(d) {
   if (!d.devSessions || typeof d.devSessions !== 'object') d.devSessions = {};
   if (!d.deviceOwner || typeof d.deviceOwner !== 'object') d.deviceOwner = {};
   if (!d.fpOwner || typeof d.fpOwner !== 'object') d.fpOwner = {};
+  if (!Array.isArray(d.accountApplications)) d.accountApplications = [];
+  if (!d.deviceAccounts || typeof d.deviceAccounts !== 'object') d.deviceAccounts = {};
+  if (!d.fpAccounts || typeof d.fpAccounts !== 'object') d.fpAccounts = {};
+  for (const u of d.users) {
+    if (!u || typeof u !== 'object') continue;
+    if (typeof u.username !== 'string') u.username = u.username ? String(u.username) : null;
+    if (!u.accountStatus) u.accountStatus = u.deletedAt ? 'deleted' : 'active';
+    if (!u.devices || typeof u.devices !== 'object') u.devices = {};
+    for (const dk of Object.keys(u.devices)) {
+      if (!Array.isArray(d.deviceAccounts[dk])) d.deviceAccounts[dk] = [];
+      if (!d.deviceAccounts[dk].includes(u.id)) d.deviceAccounts[dk].push(u.id);
+    }
+  }
+  for (const [dk, uid] of Object.entries(d.deviceOwner)) {
+    if (!Array.isArray(d.deviceAccounts[dk])) d.deviceAccounts[dk] = [];
+    if (uid && !d.deviceAccounts[dk].includes(uid)) d.deviceAccounts[dk].push(uid);
+  }
+  for (const [fk, uid] of Object.entries(d.fpOwner)) {
+    if (!Array.isArray(d.fpAccounts[fk])) d.fpAccounts[fk] = [];
+    if (uid && !d.fpAccounts[fk].includes(uid)) d.fpAccounts[fk].push(uid);
+  }
   if (!d.meta || typeof d.meta !== 'object') d.meta = { month: istMonthKey(), cmds: 0 };
   if (typeof d.meta.cmds !== 'number') d.meta.cmds = 0;
   if (!d.meta.month) d.meta.month = istMonthKey();
@@ -322,9 +444,43 @@ const findElection = (code) => {
 const findUserById = (id) => db.users.find((u) => u.id === id) || null;
 const findUserByName = (name) => db.users.find((u) => u.nameLower === nameKey(name)) || null;
 
+function tokenTime(rec) {
+  if (typeof rec === 'number') return rec;
+  return Number((rec && rec.createdAt) || 0);
+}
+function pruneUserTokens(user) {
+  if (!user || !user.tokens || typeof user.tokens !== 'object') { if (user) user.tokens = {}; return; }
+  const now = Date.now();
+  for (const [k, rec] of Object.entries(user.tokens)) {
+    const exp = rec && typeof rec === 'object' ? Number(rec.expiresAt || 0) : tokenTime(rec) + SESSION_DAYS * 864e5;
+    if (!exp || exp <= now) delete user.tokens[k];
+  }
+  const keep = Object.entries(user.tokens).sort((a, b) => tokenTime(b[1]) - tokenTime(a[1])).slice(0, 12);
+  user.tokens = Object.fromEntries(keep);
+}
+function issueToken(user) {
+  pruneUserTokens(user);
+  const token = rid(24);
+  const now = Date.now();
+  /* सर्वर पर सिर्फ़ hash रहता है — DB लीक होने पर भी असली token नहीं मिलता */
+  user.tokens[sha256(token)] = { createdAt: now, expiresAt: now + SESSION_DAYS * 864e5 };
+  pruneUserTokens(user);
+  return token;
+}
 function userByToken(token) {
   if (!token || !/^[a-f0-9]{16,80}$/.test(String(token))) return null;
-  return db.users.find((u) => u.tokens && u.tokens[token]) || null;
+  const hashed = sha256(String(token));
+  const now = Date.now();
+  for (const u of db.users) {
+    if (!u || !u.pwHash || !u.tokens) continue;   /* बिना-पासवर्ड पुराने सत्र अब मान्य नहीं */
+    if ((u.accountStatus || 'active') !== 'active' || u.deletedAt) continue;
+    const rec = u.tokens[hashed];
+    if (!rec) continue;
+    const exp = rec && typeof rec === 'object' ? Number(rec.expiresAt || 0) : tokenTime(rec) + SESSION_DAYS * 864e5;
+    if (!exp || exp <= now) { delete u.tokens[hashed]; save(); return null; }
+    return u;
+  }
+  return null;
 }
 
 /* =====================================================================
@@ -425,7 +581,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '7.0-guest-vote';
+const APP_VERSION = '8.0-username';
 
 function publicElection(e, viewer) {
   const t = tally(e);
@@ -459,7 +615,128 @@ function quotaFor(user) {
 }
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, createdAt: u.createdAt };
+  return { id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active', createdAt: u.createdAt };
+}
+function isActiveUser(u) {
+  return !!(u && !u.deletedAt && (u.accountStatus || 'active') === 'active');
+}
+function findUserByUsername(username) {
+  const u = normalizeUsername(username);
+  if (!u) return null;
+  return db.users.find((x) => x && x.username && normalizeUsername(x.username) === u) || null;
+}
+function recordDeviceAccount(user, device, fp) {
+  if (!user || !device) return;
+  if (!db.deviceAccounts || typeof db.deviceAccounts !== 'object') db.deviceAccounts = {};
+  if (!Array.isArray(db.deviceAccounts[device])) db.deviceAccounts[device] = [];
+  if (!db.deviceAccounts[device].includes(user.id)) db.deviceAccounts[device].push(user.id);
+  if (fp) {
+    if (!db.fpAccounts || typeof db.fpAccounts !== 'object') db.fpAccounts = {};
+    if (!Array.isArray(db.fpAccounts[fp])) db.fpAccounts[fp] = [];
+    if (!db.fpAccounts[fp].includes(user.id)) db.fpAccounts[fp].push(user.id);
+  }
+}
+function deviceConflictUsers(device, fp) {
+  const ids = new Set();
+  const add = (v) => { if (Array.isArray(v)) v.forEach((x) => x && ids.add(x)); else if (v) ids.add(v); };
+  if (device) {
+    add(db.deviceAccounts && db.deviceAccounts[device]);
+    add(db.deviceOwner && db.deviceOwner[device]);
+  }
+  if (fp) {
+    add(db.fpAccounts && db.fpAccounts[fp]);
+    add(db.fpOwner && db.fpOwner[fp]);
+  }
+  for (const u of db.users) {
+    if (u && device && u.devices && u.devices[device]) ids.add(u.id);
+  }
+  return [...ids].map((id) => findUserById(id)).filter(isActiveUser);
+}
+function syncApplications() {
+  if (!Array.isArray(db.accountApplications)) db.accountApplications = [];
+  const now = Date.now();
+  let changed = false;
+  for (const a of db.accountApplications) {
+    if (a && a.status === 'pending' && a.expiresAt && now > a.expiresAt) { a.status = 'expired'; a.decidedAt = now; changed = true; }
+  }
+  if (changed) save();
+}
+function usernameTaken(username, exceptUserId) {
+  const u = normalizeUsername(username);
+  if (!u) return true;
+  syncApplications();
+  if (db.users.some((x) => x && x.username && normalizeUsername(x.username) === u && x.id !== exceptUserId)) return true;
+  return db.accountApplications.some((a) => a && a.status === 'pending' && a.desiredUsername === u);
+}
+function usernameSuggestions(base) {
+  const out = [];
+  const root = normalizeUsername(base).replace(/[^a-z0-9_]/g, '').slice(0, 16) || 'user';
+  for (let i = 1; i <= 99 && out.length < 3; i++) {
+    const cand = (root + (i < 10 ? '0' + i : String(i))).slice(0, 20);
+    if (validateUsername(cand).username && !usernameTaken(cand)) out.push(cand);
+  }
+  return out;
+}
+
+/* एक जैसे नाम वाले सभी खाते (हटे हुए छोड़कर) */
+function findUsersByName(name) {
+  const k = nameKey(name);
+  return db.users.filter((u) => u && u.nameLower === k && !u.deletedAt);
+}
+function orderedCandidates(list, device, fp) {
+  const bound = new Set();
+  if (db.deviceOwner && db.deviceOwner[device]) bound.add(db.deviceOwner[device]);
+  if (fp && db.fpOwner && db.fpOwner[fp]) bound.add(db.fpOwner[fp]);
+  return [...list].sort((a, b) =>
+    ((bound.has(b.id) ? 1 : 0) - (bound.has(a.id) ? 1 : 0)) ||
+    ((b.lastLoginAt || 0) - (a.lastLoginAt || 0)));
+}
+function findPasswordMatch(candidates, password) {
+  let checked = 0;
+  for (const u of candidates) {
+    if (!u.pwHash) continue;
+    if (++checked > 30) break;   /* CPU सुरक्षा: एक नाम पर असीमित जाँच नहीं */
+    if (verifySecret(password, u.pwHash)) return u;
+  }
+  return null;
+}
+function findRecoveryMatch(candidates, recoveryCode) {
+  const code = normalizeRecovery(recoveryCode);
+  if (code.length !== 12) return null;
+  let checked = 0;
+  for (const u of candidates) {
+    if (!u.recoveryHash) continue;
+    if (++checked > 30) break;
+    if (verifySecret(code, u.recoveryHash)) return u;
+  }
+  return null;
+}
+function claimableLegacy(candidates, device, fp) {
+  /* पुराना बिना-पासवर्ड खाता सिर्फ़ उसी फ़ोन से claim होगा जो पहले से उससे बँधा है */
+  return candidates.find((u) => !u.pwHash) && orderedCandidates(candidates, device, fp)
+    .find((u) => !u.pwHash && ((db.deviceOwner && db.deviceOwner[device] === u.id) || (fp && db.fpOwner && db.fpOwner[fp] === u.id))) || null;
+}
+/* सफल login/register/recovery के बाद का साझा काम: device याद + guest वोट जोड़ना + token */
+async function completeAuth(req, res, user, body, extra = {}, status = 200) {
+  const device = deviceKeyFrom(req, body && body.deviceId);
+  if (!db.deviceOwner) db.deviceOwner = {};
+  db.deviceOwner[device] = user.id;   /* अब यह सिर्फ़ "इस फ़ोन का आख़िरी खाता" है, रोक नहीं */
+  const fp = fpKeyFrom(req);
+  if (fp) {
+    if (!db.fpOwner) db.fpOwner = {};
+    db.fpOwner[fp] = user.id;
+  }
+  if (!user.devices || typeof user.devices !== 'object') user.devices = {};
+  user.devices[device] = Date.now();
+  if (Object.keys(user.devices).length > 40) {
+    user.devices = Object.fromEntries(Object.entries(user.devices).sort((a, b) => b[1] - a[1]).slice(0, 40));
+  }
+  recordDeviceAccount(user, device, fp);
+  user.lastLoginAt = Date.now();
+  const adopted = adoptGuestVotes(user, device);
+  const token = issueToken(user);
+  await saveNow();
+  return sendJson(res, status, { user: publicUser(user), token, quota: quotaFor(user), adoptedVotes: adopted, ...extra });
 }
 
 /* 🟢 बिना लॉगिन वोट (मेहमान मतदाता) — शेयर किया लिंक खोलने वाले को
@@ -487,10 +764,33 @@ function adoptGuestVotes(user, device) {
   for (const e of db.elections) {
     const gv = e.votes && e.votes[key];
     if (!gv) continue;
-    if (e.votes[user.id]) {
-      /* इस व्यक्ति का वोट पहले से है — दोनों वोट रहेंगे, पर नाम जुड़ जाएगा */
-      gv.linkedUserId = user.id;
-      gv.linkedName = user.name;
+    const mine = e.votes[user.id];
+    if (mine) {
+      /* दोनों तरफ़ से वोट मिल गया (guest + खाता) — गिनती में सिर्फ़ सबसे पुराना
+         एक ही रहेगा; दूसरा mergedVotes में नोट रहेगा ताकि developer को दिखे। */
+      const guestOlder = (Number(gv.at) || 0) <= (Number(mine.at) || 0);
+      const kept = guestOlder ? gv : mine;
+      const dropped = guestOlder ? mine : gv;
+      if (!Array.isArray(e.mergedVotes)) e.mergedVotes = [];
+      e.mergedVotes.push({
+        at: Date.now(), userId: user.id, guestId: key,
+        keptCandidate: kept.c || null, droppedCandidate: dropped.c || null,
+        reason: 'guest+account same person',
+      });
+      delete e.votes[key];
+      e.votes[user.id] = {
+        c: kept.c,
+        at: kept.at || Date.now(),
+        device: kept.device || device,
+        guest: false,
+        via: guestOlder ? 'guest' : (mine.via || 'account'),
+        sourceGuest: true,
+        linkedName: user.name,
+        linkedUsername: user.username || null,
+        adoptedAt: Date.now(),
+      };
+      if (e.devices && e.devices[device]) e.devices[device].userId = user.id;
+      adopted++;
       continue;
     }
     delete e.votes[key];
@@ -499,12 +799,55 @@ function adoptGuestVotes(user, device) {
       at: gv.at || Date.now(),
       device: gv.device || device,
       guest: false,
+      via: 'guest',
+      sourceGuest: true,
+      linkedName: user.name,
+      linkedUsername: user.username || null,
+      originalGuestId: key,
       adoptedAt: Date.now(),
     };
     if (e.devices && e.devices[device]) e.devices[device].userId = user.id;
     adopted++;
   }
   return adopted;
+}
+
+/* पुराने खाते को नए खाते में मिलाना (appeal approve पर replacement) — चुनाव/वोट
+   नए खाते से जुड़ जाते हैं, पुराना खाता बंद हो जाता है, दो वोट हों तो एक ही गिना जाता है। */
+function mergeAccountInto(oldUser, newUser) {
+  if (!oldUser || !newUser || oldUser.id === newUser.id) return;
+  for (const e of db.elections) {
+    if (e.creatorId === oldUser.id) e.creatorId = newUser.id;
+    const ov = e.votes && e.votes[oldUser.id];
+    const nv = e.votes && e.votes[newUser.id];
+    if (ov && !nv) {
+      delete e.votes[oldUser.id];
+      e.votes[newUser.id] = { ...ov, mergedFrom: oldUser.id };
+    } else if (ov && nv) {
+      const keepOld = (Number(ov.at) || 0) <= (Number(nv.at) || 0);
+      if (!Array.isArray(e.mergedVotes)) e.mergedVotes = [];
+      e.mergedVotes.push({ at: Date.now(), userId: newUser.id, fromUserId: oldUser.id, keptCandidate: (keepOld ? ov : nv).c || null, droppedCandidate: (keepOld ? nv : ov).c || null, reason: 'account replaced' });
+      if (keepOld) e.votes[newUser.id] = { ...ov, mergedFrom: oldUser.id };
+      delete e.votes[oldUser.id];
+    }
+    if (e.devices) for (const dk of Object.keys(e.devices)) if (e.devices[dk] && e.devices[dk].userId === oldUser.id) e.devices[dk].userId = newUser.id;
+  }
+  const remapList = (bag) => {
+    if (!bag || typeof bag !== 'object') return;
+    for (const k of Object.keys(bag)) {
+      if (Array.isArray(bag[k])) bag[k] = [...new Set(bag[k].map((x) => (x === oldUser.id ? newUser.id : x)))];
+      else if (bag[k] === oldUser.id) bag[k] = newUser.id;
+    }
+  };
+  remapList(db.deviceOwner); remapList(db.fpOwner); remapList(db.deviceAccounts); remapList(db.fpAccounts);
+  for (const [dk, ts] of Object.entries(oldUser.devices || {})) {
+    if (!newUser.devices[dk] || Number(ts) > Number(newUser.devices[dk])) newUser.devices[dk] = ts;
+    recordDeviceAccount(newUser, dk, null);
+  }
+  oldUser.accountStatus = 'replaced';
+  oldUser.replacedBy = newUser.id;
+  oldUser.replacedAt = Date.now();
+  oldUser.tokens = {};
 }
 
 function deviceKeyFrom(req, bodyDevice) {
@@ -737,85 +1080,340 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  /* ---------- username खाली है या नहीं (सिर्फ़ जाँच, खाता नहीं बनता) ---------- */
+  if ((method === 'GET' || method === 'POST') && parts[1] === 'auth' && parts[2] === 'username-available') {
+    if (!rateLimit(req, 'uname-check', 60, 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा जाँचें। थोड़ा रुककर फिर देखें।' });
+    }
+    let raw = url.searchParams.get('u') || '';
+    if (method === 'POST') { const b = await readBody(req); raw = b.username || raw; }
+    const uv = validateUsername(raw);
+    if (uv.error) return sendJson(res, 200, { available: false, valid: false, error: uv.error, username: normalizeUsername(raw) });
+    const taken = usernameTaken(uv.username, viewer ? viewer.id : null);
+    return sendJson(res, 200, {
+      available: !taken,
+      valid: true,
+      username: uv.username,
+      error: taken ? 'यह username पहले से उपयोग में है — कोई दूसरा चुनें।' : null,
+      suggestions: taken ? usernameSuggestions(uv.username) : [],
+    });
+  }
+
+  /* ---------- नया खाता: असली नाम + unique username + 6–10 अंकों का PIN ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'register') {
+    if (!rateLimit(req, 'register', 15, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। कुछ मिनट बाद फिर प्रयास करें।' });
+    }
+    const body = await readBody(req);
+    const nv = validateName(body.name);
+    if (nv.error) return sendJson(res, 400, { error: nv.error });
+    const uv = validateUsername(body.username);
+    if (uv.error) return sendJson(res, 400, { error: uv.error });
+    const pv = validatePin(body.password, uv.username);
+    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    if (usernameTaken(uv.username)) {
+      return sendJson(res, 409, { error: 'यह username (@' + uv.username + ') पहले से उपयोग में है — कोई दूसरा चुनें।', code: 'USERNAME_TAKEN', suggestions: usernameSuggestions(uv.username) });
+    }
+
+    const device = deviceKeyFrom(req, body.deviceId);
+    const fp = fpKeyFrom(req);
+    const sameName = orderedCandidates(findUsersByName(nv.name), device, fp);
+
+    /* पुराना बिना-PIN खाता + यही उसका अपना फ़ोन -> उसी खाते पर username+PIN लगा दो (नया खाता नहीं) */
+    const legacy = claimableLegacy(sameName, device, fp);
+    if (legacy) {
+      const recoveryCode = setPasswordAndRecovery(legacy, pv.password);
+      legacy.name = nv.name;
+      legacy.username = uv.username;
+      legacy.accountStatus = 'active';
+      return completeAuth(req, res, legacy, body, { claimed: true, recoveryCode }, 200);
+    }
+
+    /* 🔒 एक फ़ोन = एक खाता: इस फ़ोन पर पहले से कोई खाता है तो सीधा दूसरा signup नहीं —
+       परिवार के दूसरे सदस्य के लिए appeal वाला रास्ता है (डेवलपर मंज़ूरी देगा)। */
+    const conflicts = deviceConflictUsers(device, fp).filter((u) => u.username || u.pwHash);
+    if (conflicts.length) {
+      return sendJson(res, 409, {
+        error: 'इस फ़ोन पर पहले से एक खाता बना हुआ है, इसलिए दूसरा खाता सीधे नहीं बनेगा। अगर आप परिवार के दूसरे सदस्य हैं तो नीचे "Username भूल गए / दूसरा खाता चाहिए" से appeal भेजें — Team Janmat जाँचकर मंज़ूरी देगी।',
+        code: 'DEVICE_HAS_ACCOUNT',
+      });
+    }
+
+    const user = {
+      id: rid(8),
+      name: nv.name,
+      nameLower: nameKey(nv.name),
+      username: uv.username,
+      accountStatus: 'active',
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+      isDemo: false,
+      devices: {},
+      tokens: {},
+    };
+    const recoveryCode = setPasswordAndRecovery(user, pv.password);
+    db.users.push(user);
+    return completeAuth(req, res, user, body, {
+      isNewAccount: true,
+      recoveryCode,
+      sameNameExists: sameName.length > 0,
+    }, 201);
+  }
+
+  /* ---------- पुराना खाता (v7.x) में username जोड़ना ----------
+     पुराना नाम + पुराना पासवर्ड साबित करो, फिर नया username + नया PIN लगाओ।
+     बिल्कुल पुराने बिना-पासवर्ड खाते सिर्फ़ अपने बँधे फ़ोन से claim होंगे। */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'migrate') {
+    if (!rateLimit(req, 'migrate', 10, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। कुछ मिनट बाद फिर प्रयास करें।' });
+    }
+    const body = await readBody(req);
+    const nv = validateName(body.name);
+    if (nv.error) return sendJson(res, 400, { error: nv.error });
+    const uv = validateUsername(body.username);
+    if (uv.error) return sendJson(res, 400, { error: uv.error });
+    const pv = validatePin(body.password, uv.username);
+    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    if (usernameTaken(uv.username)) {
+      return sendJson(res, 409, { error: 'यह username (@' + uv.username + ') पहले से उपयोग में है — कोई दूसरा चुनें।', code: 'USERNAME_TAKEN', suggestions: usernameSuggestions(uv.username) });
+    }
+    const device = deviceKeyFrom(req, body.deviceId);
+    const fp = fpKeyFrom(req);
+    const candidates = orderedCandidates(findUsersByName(nv.name), device, fp).filter((u) => !u.username);
+    const oldPassword = String(body.oldPassword == null ? '' : body.oldPassword);
+    let target = oldPassword ? findPasswordMatch(candidates, oldPassword) : null;
+    if (!target) target = claimableLegacy(candidates, device, fp);
+    if (!target) {
+      return sendJson(res, 401, { error: 'पुराना खाता साबित नहीं हो सका। पुराना नाम और पुराना पासवर्ड ठीक से लिखें — या उसी पुराने फ़ोन से कोशिश करें जिससे खाता बना था।', code: 'MIGRATION_FAILED' });
+    }
+    const recoveryCode = setPasswordAndRecovery(target, pv.password);
+    target.name = nv.name;
+    target.username = uv.username;
+    target.accountStatus = 'active';
+    target.tokens = {};
+    return completeAuth(req, res, target, body, { claimed: true, migrated: true, recoveryCode }, 200);
+  }
+
+  /* ---------- लॉगिन किया हुआ पुराना उपयोगकर्ता username चुने (सत्र पहले से है) ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'set-username') {
+    if (!viewer) return sendJson(res, 401, { error: 'लॉगिन नहीं है।', code: 'LOGIN_REQUIRED' });
+    if (viewer.username) return sendJson(res, 409, { error: 'आपके खाते पर username (@' + viewer.username + ') पहले से लगा है — username हमेशा के लिए वही रहता है।', code: 'USERNAME_ALREADY_SET' });
+    const body = await readBody(req);
+    const uv = validateUsername(body.username);
+    if (uv.error) return sendJson(res, 400, { error: uv.error });
+    if (usernameTaken(uv.username, viewer.id)) {
+      return sendJson(res, 409, { error: 'यह username (@' + uv.username + ') पहले से उपयोग में है — कोई दूसरा चुनें।', code: 'USERNAME_TAKEN', suggestions: usernameSuggestions(uv.username) });
+    }
+    viewer.username = uv.username;
+    viewer.accountStatus = 'active';
+    await saveNow();
+    return sendJson(res, 200, { ok: true, user: publicUser(viewer), quota: quotaFor(viewer) });
+  }
+
+  /* ---------- लॉगिन: username + PIN ज़रूरी (नाम से लॉगिन अब बिल्कुल बंद) ---------- */
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
     if (!rateLimit(req, 'login', 20, 60000)) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा लॉगिन कोशिशें। एक मिनट बाद प्रयास करें।' });
     }
     const body = await readBody(req);
-    const name = clean(body.name, 30);
-
-    if (!name) return sendJson(res, 400, { error: 'अपना नाम लिखें।' });
-    if (name.length < 2) return sendJson(res, 400, { error: 'नाम कम से कम 2 अक्षरों का होना चाहिए।' });
-    if (!/^[\p{L}\p{M}\p{N} .'_-]+$/u.test(name)) {
-      return sendJson(res, 400, { error: 'नाम में सिर्फ अक्षर, अंक, स्पेस और . \' _ - चलेंगे।' });
+    const uv = validateUsername(body.username);
+    if (uv.error) {
+      return sendJson(res, 400, { error: 'अपना सही username लिखें (जैसे pawan_verma) — लॉगिन अब नाम से नहीं, username से होता है।', code: 'USERNAME_REQUIRED' });
     }
-    if (RESERVED_NAMES.has(nameKey(name))) {
-      return sendJson(res, 400, { error: 'यह नाम आरक्षित है, कृपया दूसरा नाम चुनें।' });
+    if (!globalRateLimit('login-user:' + sha256(uv.username).slice(0, 16), 30, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'इस username पर बहुत ज़्यादा कोशिशें हुई हैं। 10 मिनट बाद प्रयास करें।' });
     }
-
-    let user = findUserByName(name);
+    const password = String(body.password == null ? '' : body.password);
+    if (!password) {
+      return sendJson(res, 400, { error: 'अपना PIN लिखें।', code: 'PASSWORD_REQUIRED' });
+    }
+    const user = findUserByUsername(uv.username);
     if (!user) {
-      user = {
-        id: rid(8),
-        name,
-        nameLower: nameKey(name),
-        createdAt: Date.now(),
-        lastLoginAt: Date.now(),
-        isDemo: false,
-        devices: {},
-        tokens: {},
-      };
-      db.users.push(user);
-    } else {
-      user.lastLoginAt = Date.now();
-      if (name !== user.name) user.name = name; // preserve latest capitalisation
+      syncApplications();
+      const pending = db.accountApplications.find((a) => a && a.status === 'pending' && a.desiredUsername === uv.username);
+      if (pending) {
+        return sendJson(res, 401, { error: 'यह खाता अभी Team Janmat की जाँच में है (Pending)। मंज़ूरी मिलते ही इसी username + PIN से लॉगिन होगा।', code: 'ACCOUNT_PENDING' });
+      }
+      return sendJson(res, 401, { error: 'इस username का कोई खाता नहीं मिला। Username ध्यान से देखें — या "नया खाता बनाएँ" चुनें।', code: 'ACCOUNT_NOT_FOUND' });
     }
+    if (!isActiveUser(user)) {
+      return sendJson(res, 401, { error: 'यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।', code: 'ACCOUNT_INACTIVE' });
+    }
+    if (!user.pwHash || !verifySecret(password, user.pwHash)) {
+      return sendJson(res, 401, { error: 'PIN सही नहीं है। ध्यान से दोबारा लिखें — या "PIN भूल गए" से रिकवरी कोड इस्तेमाल करें।', code: 'WRONG_PASSWORD' });
+    }
+    return completeAuth(req, res, user, body, {}, 200);
+  }
 
+  /* ---------- PIN भूल गए: username + लॉगिन-कार्ड वाला गुप्त रिकवरी कोड ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'recover') {
+    if (!rateLimit(req, 'recover', 5, 10 * 60000) || !globalRateLimit('recover', 30, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। 10 मिनट बाद प्रयास करें।' });
+    }
+    const body = await readBody(req);
+    const uv = validateUsername(body.username);
+    if (uv.error) return sendJson(res, 400, { error: 'पहले अपना सही username लिखें।' });
+    const pv = validatePin(body.newPassword, uv.username);
+    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    const user = findUserByUsername(uv.username);
+    const code = normalizeRecovery(body.recoveryCode);
+    if (!user || !isActiveUser(user) || code.length !== 12 || !user.recoveryHash || !verifySecret(code, user.recoveryHash)) {
+      return sendJson(res, 401, { error: 'रिकवरी कोड सही नहीं है (या इस username का खाता नहीं है)। लॉगिन कार्ड पर लिखा कोड ठीक वैसा ही लिखें।', code: 'INVALID_RECOVERY' });
+    }
+    const recoveryCode = setPasswordAndRecovery(user, pv.password);   /* पुराना कोड अब बेकार, नया मिलेगा */
+    user.tokens = {};   /* बाकी सब जगह से लॉगआउट */
+    return completeAuth(req, res, user, body, { recovered: true, recoveryCode }, 200);
+  }
+
+  /* ---------- username का संकेत: इसी फ़ोन से जुड़े खाते का छिपा हुआ username ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'username-hint') {
+    if (!rateLimit(req, 'uname-hint', 10, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। कुछ मिनट बाद प्रयास करें।' });
+    }
+    const body = await readBody(req);
     const device = deviceKeyFrom(req, body.deviceId);
-
-    /* 🔒 एक मोबाइल/डिवाइस = एक नाम (कोई दूसरा नाम इसी डिवाइस से लॉगिन नहीं कर सकता) */
-    if (!db.deviceOwner) db.deviceOwner = {};
-    const ownerId = db.deviceOwner[device];
-    if (ownerId && ownerId !== user.id) {
-      const owner = db.users.find((u) => u.id === ownerId);
-      return sendJson(res, 403, {
-        error: `इस मोबाइल से पहले ${owner ? '"' + owner.name + '"' : 'किसी और'} नाम से लॉगिन हो चुका है। एक मोबाइल = एक नाम। उसी नाम से लॉगिन करें या दूसरा मोबाइल इस्तेमाल करें।`,
-        code: 'DEVICE_TAKEN',
-        ownerName: owner ? owner.name : null,
-      });
-    }
-    db.deviceOwner[device] = user.id;
-    /* 🧬 फिंगरप्रिंट भी इसी नाम से बाँध दो (डेटा मिटने पर पहचान बची रहे) */
     const fp = fpKeyFrom(req);
-    if (fp) {
-      if (!db.fpOwner) db.fpOwner = {};
-      db.fpOwner[fp] = user.id;
+    const users = deviceConflictUsers(device, fp).filter((u) => u.username);
+    if (!users.length) {
+      return sendJson(res, 200, { ok: false, hint: null, message: 'इस फ़ोन से कोई खाता जुड़ा नहीं मिला। लॉगिन कार्ड देखें या नीचे appeal भेजें।' });
     }
+    const ordered = orderedCandidates(users, device, fp);
+    return sendJson(res, 200, {
+      ok: true,
+      count: ordered.length,
+      hints: ordered.slice(0, 3).map((u) => ({ usernameMasked: '@' + maskUsername(u.username), name: u.name })),
+      message: 'क्या इनमें से कोई आपका username है? पूरा username लॉगिन कार्ड पर लिखा होता है।',
+    });
+  }
 
-    user.devices[device] = Date.now();
-    if (Object.keys(user.devices).length > 40) {
-      const entries = Object.entries(user.devices).sort((a, b) => b[1] - a[1]).slice(0, 40);
-      user.devices = Object.fromEntries(entries);
+  /* ---------- Appeal: username भूल गए / साझा फ़ोन पर दूसरा खाता ----------
+     खाता तुरंत नहीं बनता — आवेदन Pending रहेगा, डेवलपर (Team Janmat) जाँचकर
+     डेवलपर पैनल से मंज़ूरी देगा। चुना username तब तक reserved रहता है। */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'apply') {
+    if (!rateLimit(req, 'apply', 5, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा आवेदन। कुछ मिनट बाद प्रयास करें।' });
     }
-
-    /* इस फ़ोन से पहले बिना लॉगिन जो वोट पड़े थे, उन पर अब इसका नाम लग जाए */
-    const adopted = adoptGuestVotes(user, device);
-
-    const token = rid(24);
-    user.tokens[token] = Date.now();
-    const tokens = Object.entries(user.tokens).sort((a, b) => b[1] - a[1]).slice(0, 12);
-    user.tokens = Object.fromEntries(tokens);
-
+    const body = await readBody(req);
+    const kind = body.kind === 'device-second-account' ? 'device-second-account' : 'forgot-username';
+    const nv = validateName(body.name);
+    if (nv.error) return sendJson(res, 400, { error: nv.error });
+    const uv = validateUsername(body.username);
+    if (uv.error) return sendJson(res, 400, { error: uv.error });
+    const pv = validatePin(body.password, uv.username);
+    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    const reason = clean(body.reason, 300);
+    if (reason.length < 8) return sendJson(res, 400, { error: 'कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर) — जैसे "पुराना username भूल गया, फ़ोन यही है"।' });
+    if (usernameTaken(uv.username)) {
+      return sendJson(res, 409, { error: 'यह username (@' + uv.username + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', code: 'USERNAME_TAKEN', suggestions: usernameSuggestions(uv.username) });
+    }
+    const device = deviceKeyFrom(req, body.deviceId);
+    const fp = fpKeyFrom(req);
+    syncApplications();
+    const duplicate = db.accountApplications.find((a) => a && a.status === 'pending' && a.device === device && a.desiredUsername === uv.username);
+    if (duplicate) {
+      return sendJson(res, 409, { error: 'इसी username का आपका आवेदन पहले से जाँच में है। आवेदन नंबर: ' + duplicate.id, code: 'APPLICATION_PENDING', applicationId: duplicate.id });
+    }
+    const conflicts = deviceConflictUsers(device, fp).map((u) => u.id);
+    const receipt = rid(14);
+    const recoveryCode = makeRecoveryCode();
+    const app = {
+      id: 'APP-' + rid(4).toUpperCase(),
+      kind,
+      name: nv.name,
+      desiredUsername: uv.username,
+      pwHash: hashSecret(pv.password),
+      recoveryHash: hashSecret(normalizeRecovery(recoveryCode)),
+      receiptHash: sha256(receipt),
+      reason,
+      device,
+      fp: fp || null,
+      conflictUserIds: conflicts,
+      status: 'pending',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 7 * 864e5,
+      decidedAt: null,
+      decisionNote: '',
+      resultingUserId: null,
+      replacedUserId: null,
+    };
+    db.accountApplications.push(app);
     await saveNow();
-    return sendJson(res, 200, { user: publicUser(user), token, quota: quotaFor(user), adoptedVotes: adopted });
+    broadcastDev('account-application', { at: app.createdAt, id: app.id, kind: app.kind, name: app.name, username: app.desiredUsername });
+    return sendJson(res, 201, {
+      ok: true,
+      applicationId: app.id,
+      receipt,
+      recoveryCode,
+      status: 'pending',
+      message: 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।',
+    });
+  }
+
+  /* ---------- Appeal की स्थिति (receipt या उसी फ़ोन से) ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'application-status') {
+    const body = await readBody(req);
+    syncApplications();
+    const device = deviceKeyFrom(req, body.deviceId);
+    let app = null;
+    const appId = clean(body.applicationId, 24).toUpperCase();
+    if (appId) app = db.accountApplications.find((a) => a && a.id === appId) || null;
+    if (!app && device) {
+      const mine = db.accountApplications.filter((a) => a && a.device === device).sort((a, b) => b.createdAt - a.createdAt);
+      app = mine[0] || null;
+    }
+    if (!app) return sendJson(res, 404, { error: 'इस फ़ोन पर कोई आवेदन नहीं मिला। आवेदन नंबर ठीक से लिखें।' });
+    const receipt = clean(body.receipt, 60);
+    const receiptOk = receipt && app.receiptHash === sha256(receipt);
+    if (!receiptOk && app.device !== device) {
+      return sendJson(res, 403, { error: 'यह आवेदन इस फ़ोन/रसीद से नहीं खुल सकता।' });
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      applicationId: app.id,
+      status: app.status,
+      username: app.desiredUsername,
+      name: app.name,
+      createdAt: app.createdAt,
+      decidedAt: app.decidedAt || null,
+      decisionNote: app.decisionNote || '',
+      message: app.status === 'approved'
+        ? 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।'
+        : app.status === 'rejected'
+          ? 'क्षमा करें, यह आवेदन मंज़ूर नहीं हुआ। कारण ऊपर दिया है।'
+          : app.status === 'expired'
+            ? 'यह आवेदन 7 दिन पूरे होने पर समाप्त हो गया — चाहें तो फिर से आवेदन भेजें।'
+            : 'आपका आवेदन Team Janmat की जाँच में है। मंज़ूरी मिलते ही यहीं पता चल जाएगा।',
+    });
+  }
+
+  /* ---------- PIN बदलना (लॉगिन किया हुआ उपयोगकर्ता) ---------- */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'password') {
+    if (!viewer) return sendJson(res, 401, { error: 'लॉगिन नहीं है।', code: 'LOGIN_REQUIRED' });
+    if (!rateLimit(req, 'pwchange', 10, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। कुछ मिनट बाद प्रयास करें।' });
+    }
+    const body = await readBody(req);
+    if (!viewer.pwHash || !verifySecret(String(body.oldPassword || ''), viewer.pwHash)) {
+      return sendJson(res, 401, { error: 'मौजूदा PIN सही नहीं है।', code: 'WRONG_PASSWORD' });
+    }
+    const pv = validatePin(body.newPassword, viewer.username);
+    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    viewer.pwHash = hashSecret(pv.password);
+    viewer.pwSetAt = Date.now();
+    /* इस सत्र को छोड़कर बाकी सब सत्र बंद */
+    const cur = sha256(clean(req.headers['x-user-token'] || '', 80));
+    const curRec = viewer.tokens && viewer.tokens[cur];
+    viewer.tokens = curRec ? { [cur]: curRec } : {};
+    await saveNow();
+    return sendJson(res, 200, { ok: true, message: 'PIN बदल गया।' });
   }
 
   /* =====================================================================
-     🟢 अपने आप लॉगिन (auto-login)
-     इस फ़ोन से जो एक बार लॉगिन कर चुका है, उसे फिर से नाम न लिखना पड़े —
-     लॉगआउट, ब्राउज़र बंद, फ़ोन रीस्टार्ट के बाद भी वही खाता मिल जाए।
-     ब्राउज़र का डेटा पूरा मिट जाए तो फिंगरप्रिंट से सिर्फ़ "सुझाव" मिलता है
-     (एक टैप में लॉगिन) — बिना पूछे किसी और के खाते में नहीं डालते।
+     🔐 डिवाइस संकेत (सिर्फ़ नाम का सुझाव — बिना पासवर्ड token अब कभी नहीं)
+     पहले device पहचानते ही खाता खुल जाता था; पासवर्ड व्यवस्था में वह
+     पिछले दरवाज़े जैसा होता, इसलिए अब सिर्फ़ "इस फ़ोन पर कौन-सा नाम
+     चला था" बताया जाता है ताकि लॉगिन पेज पर नाम भरने में आसानी हो।
+     असली सत्र हमेशा सहेजे हुए token (या पासवर्ड लॉगिन) से ही चलता है।
      ===================================================================== */
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'auto') {
     const body = await readBody(req);
@@ -823,75 +1421,32 @@ async function handleApi(req, res, pathname) {
     const fp = fpKeyFrom(req);
     if (!db.deviceOwner) db.deviceOwner = {};
     if (!db.fpOwner) db.fpOwner = {};
-
-    const byDevice = db.deviceOwner[device];
-    const byFp = fp ? db.fpOwner[fp] : null;
-    const ownerId = byDevice || byFp;
+    const ownerId = db.deviceOwner[device] || (fp ? db.fpOwner[fp] : null);
     const owner = ownerId ? db.users.find((u) => u.id === ownerId) : null;
     if (!owner || owner.deletedAt) {
-      return sendJson(res, 200, { ok: false, hint: null });
+      return sendJson(res, 200, { ok: false, hint: null, passwordRequired: true });
     }
-
-    /* डेटा मिट चुका है (device नया, सिर्फ़ फिंगरप्रिंट मिला) → पूछकर लॉगिन */
-    if (!byDevice) {
-      return sendJson(res, 200, {
-        ok: false,
-        hint: { name: owner.name, via: 'fingerprint' },
-        message: 'इस फ़ोन से पहले "' + owner.name + '" नाम से लॉगिन हुआ था।',
-      });
-    }
-
-    /* यही फ़ोन — सीधे लॉगिन (बिना लॉगिन वाले वोट भी नाम से जोड़ दो) */
-    adoptGuestVotes(owner, device);
-    const token = rid(24);
-    owner.tokens[token] = Date.now();
-    owner.lastLoginAt = Date.now();
-    const keep = Object.entries(owner.tokens).sort((a, b) => b[1] - a[1]).slice(0, 12);
-    owner.tokens = Object.fromEntries(keep);
-    if (fp) db.fpOwner[fp] = owner.id;
-    await saveNow();
-    return sendJson(res, 200, { ok: true, user: publicUser(owner), token, quota: quotaFor(owner), auto: true });
+    return sendJson(res, 200, {
+      ok: false,
+      hint: { name: owner.name, usernameMasked: owner.username ? '@' + maskUsername(owner.username) : null, via: db.deviceOwner[device] ? 'device' : 'fingerprint' },
+      passwordRequired: true,
+      message: 'इस फ़ोन से पहले "' + owner.name + '" का खाता चला था। लॉगिन के लिए अपना username + PIN लिखें।',
+    });
   }
 
-  /* ---------- device rebind: is mobile ka na
-     agar kisi ne galti se doosra naam likh diya, to purana naam likhkar badal sakta hai ---------- */
+  /* ---------- पुराना name-device rebind अब बंद ----------
+     Username-व्यवस्था में फ़ोन को नाम से "छुड़ाने" की ज़रूरत नहीं है: कोई भी
+     अपने username + PIN से किसी भी फ़ोन पर लॉगिन कर सकता है। इस रास्ते को
+     खुला रखना "एक फ़ोन = एक खाता" नियम कमज़ोर कर सकता था। */
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'rebind') {
-    if (!rateLimit(req, 'rebind', 5, 10 * 60000)) {
-      return sendJson(res, 429, { error: 'बहुत ज़्यादा प्रयास। 10 मिनट बाद कोशिश करें।' });
-    }
-    const body = await readBody(req);
-    const device = deviceKeyFrom(req, body.deviceId);
-    if (!db.deviceOwner) db.deviceOwner = {};
-    const ownerId = db.deviceOwner[device];
-    if (!ownerId) {
-      return sendJson(res, 400, { error: 'इस मोबाइल पर कोई नाम बँधा नहीं है। सीधे लॉगिन करें।', code: 'NOT_BOUND' });
-    }
-    const owner = db.users.find((u) => u.id === ownerId);
-    const typedOld = nameKey(clean(body.oldName, 40));
-    const realOld = owner && !owner.deletedAt ? nameKey(owner.name) : null;
-
-    /* पुराना नाम सही लिखने पर ही बदलेगा — बिना जानकारी कोई दूसरा नहीं बदल सकता */
-    const okOld = realOld ? typedOld === realOld : true; // खाता हट चुका हो तो रोक नहीं
-    if (!okOld) {
-      return sendJson(res, 403, {
-        error: 'इस मोबाइल से जुड़ा पुराना नाम ग़लत है। वही नाम लिखें जिससे इस मोबाइल पर लॉगिन हुआ था।',
-        code: 'OLD_NAME_MISMATCH',
-        ownerName: owner && !owner.deletedAt ? owner.name : null,
-      });
-    }
-
-    delete db.deviceOwner[device];
-    if (owner && owner.devices) delete owner.devices[device];
-    /* फिंगरप्रिंट की बाँध भी हटाओ, वरना नाम बदलने के बाद भी पुराना नाम अटकेगा */
-    if (db.fpOwner) Object.keys(db.fpOwner).forEach((k) => { if (db.fpOwner[k] === ownerId) delete db.fpOwner[k]; });
-    await saveNow();
-    return sendJson(res, 200, { ok: true, freedFrom: realOld ? owner.name : null });
+    return sendJson(res, 410, { error: 'अब लॉगिन username + PIN से होता है — फ़ोन से नाम छुड़ाने की ज़रूरत नहीं। अपने username से लॉगिन करें।', code: 'REBIND_RETIRED' });
   }
 
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'logout') {
     const token = clean(req.headers['x-user-token'] || '', 80);
-    if (viewer && token && viewer.tokens[token]) {
-      delete viewer.tokens[token];
+    if (viewer && token && viewer.tokens) {
+      delete viewer.tokens[sha256(token)];
+      delete viewer.tokens[token];   /* पुरानी शैली का बचा-खुचा सत्र भी साफ़ */
       await saveNow();
     }
     return sendJson(res, 200, { ok: true });
@@ -926,7 +1481,7 @@ async function handleApi(req, res, pathname) {
   /* ---------- elections: create ---------- */
   if (method === 'POST' && parts[1] === 'elections' && parts.length === 2) {
     if (!viewer) {
-      return sendJson(res, 401, { error: 'चुनाव बनाने के लिए पहले नाम से लॉगिन करें।', code: 'LOGIN_REQUIRED' });
+      return sendJson(res, 401, { error: 'चुनाव बनाने के लिए पहले username से लॉगिन करें।', code: 'LOGIN_REQUIRED' });
     }
     if (!rateLimit(req, 'create', 12, 60000)) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा अनुरोध। एक मिनट बाद प्रयास करें।' });
@@ -1353,6 +1908,9 @@ async function handleApi(req, res, pathname) {
         return {
           id: u.id,
           name: u.name,
+          username: u.username || null,
+          accountStatus: u.accountStatus || 'active',
+          hasPassword: !!u.pwHash,
           createdAt: u.createdAt,
           lastLoginAt: u.lastLoginAt || null,
           isDemo: !!u.isDemo,
@@ -1382,6 +1940,7 @@ async function handleApi(req, res, pathname) {
           isDemo: !!e.isDemo,
           creatorId: e.creatorId,
           creatorName: creator ? creator.name : 'अज्ञात',
+          creatorUsername: creator ? (creator.username || null) : null,
           creatorIsDemo: creator ? !!creator.isDemo : false,
           totalVotes: t.totalVotes,
           candidateCount: e.candidates.length,
@@ -1405,7 +1964,10 @@ async function handleApi(req, res, pathname) {
           at: (v && v.at) || 0,
           userId: uid,
           userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).startsWith('g:') ? 'मेहमान मतदाता' : 'अज्ञात उपयोगकर्ता')),
+          userUsername: u ? (u.username || null) : null,
           linkedName: (v && v.linkedName) || null,
+          linkedUsername: (v && v.linkedUsername) || (u && v && v.sourceGuest ? (u.username || null) : null),
+          voteSource: (v && v.sourceGuest) ? 'guest-first' : (String(uid).startsWith('g:') ? 'guest' : 'account'),
           userIsDemo: u ? !!u.isDemo : false,
           electionCode: e.code,
           electionTitle: e.title,
@@ -1447,6 +2009,8 @@ async function handleApi(req, res, pathname) {
       dbBytes: Buffer.byteLength(JSON.stringify(db), 'utf8'),
       dbBytesQuota: 250 * 1024 * 1024,
       openComplaints: db.complaints.filter((c) => c.status === 'open').length,
+      pendingApplications: (db.accountApplications || []).filter((a) => a && a.status === 'pending').length,
+      accountsWithoutUsername: db.users.filter((u) => u && !u.username && !u.isDemo && (u.accountStatus || 'active') === 'active').length,
     };
 
     return sendJson(res, 200, { stats, usage, users, elections, votes: voteRows.slice(0, 1000) });
@@ -1501,8 +2065,11 @@ async function handleApi(req, res, pathname) {
         return {
           at: (v && v.at) || 0,
           userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).startsWith('g:') ? 'मेहमान मतदाता' : 'अज्ञात')),
+          userUsername: u ? (u.username || null) : null,
           userIsDemo: u ? !!u.isDemo : false,
           linkedName: (v && v.linkedName) || null,
+          linkedUsername: (v && v.linkedUsername) || (u && v && v.sourceGuest ? (u.username || null) : null),
+          voteSource: (v && v.sourceGuest) ? 'guest-first' : (String(uid).startsWith('g:') ? 'guest' : 'account'),
           adopted: !!(v && v.adoptedAt),
           candidateName: cand ? cand.name : '—',
           candidateSymbol: cand ? cand.symbol || 'diya' : 'diya',
@@ -1518,6 +2085,7 @@ async function handleApi(req, res, pathname) {
       election: {
         ...publicElection(e, null),
         creatorName: creator ? creator.name : 'अज्ञात',
+        creatorUsername: creator ? (creator.username || null) : null,
         creatorId: e.creatorId,
       },
       votes,
@@ -1550,6 +2118,145 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, {
       ok: true, deleted: target,
       message: 'चुनाव साइट से हटा दिया गया (डेवलपर द्वारा)।',
+    });
+  }
+
+  /* ---------- developer: खाता आवेदन (appeals) सूची ----------
+     कोई गुप्त जानकारी (PIN/code hash) कभी नहीं भेजी जाती। */
+  if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'applications' && parts.length === 3) {
+    syncApplications();
+    const rank = { pending: 0, approved: 1, rejected: 2, expired: 3 };
+    const applications = [...db.accountApplications]
+      .sort((a, b) => ((rank[a.status] ?? 9) - (rank[b.status] ?? 9)) || (b.createdAt - a.createdAt))
+      .slice(0, 300)
+      .map((a) => ({
+        id: a.id,
+        kind: a.kind,
+        name: a.name,
+        desiredUsername: a.desiredUsername,
+        reason: a.reason,
+        status: a.status,
+        createdAt: a.createdAt,
+        expiresAt: a.expiresAt || null,
+        decidedAt: a.decidedAt || null,
+        decisionNote: a.decisionNote || '',
+        resultingUserId: a.resultingUserId || null,
+        replacedUserId: a.replacedUserId || null,
+        conflicts: (a.conflictUserIds || []).map((id) => findUserById(id)).filter(Boolean).map((u) => ({
+          id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active',
+          hasPassword: !!u.pwHash, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null,
+          electionsCreated: db.elections.filter((e) => e.creatorId === u.id).length,
+          votesCast: db.elections.filter((e) => e.votes && e.votes[u.id]).length,
+        })),
+      }));
+    return sendJson(res, 200, {
+      applications,
+      stats: {
+        total: applications.length,
+        pending: applications.filter((a) => a.status === 'pending').length,
+        approved: applications.filter((a) => a.status === 'approved').length,
+        rejected: applications.filter((a) => a.status === 'rejected').length,
+      },
+    });
+  }
+
+  /* ---------- developer: आवेदन मंज़ूर/अस्वीकार ---------- */
+  if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'applications' && parts[3] && (parts[4] === 'approve' || parts[4] === 'reject')) {
+    syncApplications();
+    const app = db.accountApplications.find((a) => a && a.id === String(parts[3]).toUpperCase());
+    if (!app) return sendJson(res, 404, { error: 'आवेदन नहीं मिला।' });
+    if (app.status !== 'pending') {
+      return sendJson(res, 409, { error: 'इस आवेदन पर पहले ही निर्णय हो चुका है (' + app.status + ')।' });
+    }
+    const body = await readBody(req);
+    const note = clean(body.note, 300);
+
+    if (parts[4] === 'reject') {
+      app.status = 'rejected';
+      app.decidedAt = Date.now();
+      app.decisionNote = note || 'Team Janmat की जाँच में यह आवेदन मंज़ूर नहीं हो सका।';
+      app.pwHash = null;          /* ठुकराए आवेदन के PIN/code server par nahi rakhte */
+      app.recoveryHash = null;
+      await saveNow();
+      broadcastDev('account-application-decision', { at: app.decidedAt, id: app.id, status: 'rejected' });
+      return sendJson(res, 200, { ok: true, applicationId: app.id, status: 'rejected' });
+    }
+
+    const replaceUserId = clean(body.replaceUserId, 40);
+    const mode = clean(body.mode, 24);
+    const conflicts = (app.conflictUserIds || []).map((id) => findUserById(id)).filter((u) => isActiveUser(u));
+    let replaceTarget = replaceUserId ? findUserById(replaceUserId) : null;
+    if (replaceUserId && !replaceTarget) return sendJson(res, 400, { error: 'बदला जाने वाला पुराना खाता नहीं मिला।' });
+    if (!replaceTarget && conflicts.length && mode !== 'additional') {
+      return sendJson(res, 400, { error: 'इस फ़ोन पर पुराना खाता मौजूद है। कृपया चुनें: पुराना खाता बदलें (उसका डेटा नए username में आएगा) या अलग दूसरा खाता बनाएँ।', code: 'REPLACE_CHOICE_REQUIRED' });
+    }
+
+    const owner = findUserByUsername(app.desiredUsername);
+    /* वही पुराना खाता + वही username -> नया खाता बनाने की जगह पुराने पर ही नया PIN लगाओ */
+    if (owner && replaceTarget && owner.id === replaceTarget.id) {
+      owner.pwHash = app.pwHash;
+      owner.recoveryHash = app.recoveryHash;
+      owner.pwSetAt = Date.now();
+      owner.name = app.name;
+      owner.accountStatus = 'active';
+      owner.tokens = {};
+      if (!owner.devices || typeof owner.devices !== 'object') owner.devices = {};
+      owner.devices[app.device] = Date.now();
+      db.deviceOwner[app.device] = owner.id;
+      if (app.fp) db.fpOwner[app.fp] = owner.id;
+      recordDeviceAccount(owner, app.device, app.fp || null);
+      const adoptedSame = adoptGuestVotes(owner, app.device);
+      app.status = 'approved'; app.decidedAt = Date.now(); app.decisionNote = note;
+      app.resultingUserId = owner.id; app.replacedUserId = owner.id;
+      app.pwHash = null; app.recoveryHash = null;
+      await saveNow();
+      broadcastDev('account-application-decision', { at: app.decidedAt, id: app.id, status: 'approved' });
+      return sendJson(res, 200, { ok: true, applicationId: app.id, status: 'approved', resultingUserId: owner.id, replacedUserId: owner.id, adoptedVotes: adoptedSame });
+    }
+    if (owner) {
+      return sendJson(res, 409, { error: 'माँगा गया username (@' + app.desiredUsername + ') इस बीच किसी खाते में लग चुका है — आवेदन अस्वीकार करके उपयोगकर्ता से नया username माँगें।' });
+    }
+
+    const newUser = {
+      id: rid(8),
+      name: app.name,
+      nameLower: nameKey(app.name),
+      username: app.desiredUsername,
+      accountStatus: 'active',
+      createdAt: Date.now(),
+      appliedAt: app.createdAt,
+      approvedFromApplication: app.id,
+      lastLoginAt: null,
+      isDemo: false,
+      devices: {},
+      tokens: {},
+      pwHash: app.pwHash,
+      pwSetAt: Date.now(),
+      recoveryHash: app.recoveryHash,
+    };
+    db.users.push(newUser);
+    newUser.devices[app.device] = Date.now();
+    db.deviceOwner[app.device] = newUser.id;
+    if (app.fp) db.fpOwner[app.fp] = newUser.id;
+    recordDeviceAccount(newUser, app.device, app.fp || null);
+    const adopted = adoptGuestVotes(newUser, app.device);
+    if (replaceTarget) mergeAccountInto(replaceTarget, newUser);
+
+    app.status = 'approved';
+    app.decidedAt = Date.now();
+    app.decisionNote = note;
+    app.resultingUserId = newUser.id;
+    app.replacedUserId = replaceTarget ? replaceTarget.id : null;
+    app.pwHash = null;
+    app.recoveryHash = null;
+    await saveNow();
+    broadcastDev('account-application-decision', { at: app.decidedAt, id: app.id, status: 'approved', username: newUser.username });
+    return sendJson(res, 200, {
+      ok: true, applicationId: app.id, status: 'approved',
+      resultingUserId: newUser.id,
+      replacedUserId: app.replacedUserId,
+      adoptedVotes: adopted,
+      username: newUser.username,
     });
   }
 
@@ -1611,7 +2318,10 @@ function serveStatic(req, res, pathname) {
    https://a2zmatdaan.github.io) aur API yahan (Render) chal rahi ho, to
    browser ko cross-origin requests ki permission chahiye.
    ALLOWED_ORIGINS env se limit kar sakte hain (comma-separated), warna '*'. */
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*')
+/* 🔒 अब default में सिर्फ़ अपनी site के पते (और local test) — '*' सिर्फ़
+   तब जब Render में ALLOWED_ORIGINS=* जानबूझकर डाला गया हो। */
+const DEFAULT_ORIGINS = 'https://a2zmatdaan.github.io,https://a2zmatdaan-github-io.onrender.com,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3456,http://127.0.0.1:3456';
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || DEFAULT_ORIGINS)
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean);
@@ -1638,6 +2348,8 @@ const server = http.createServer((req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Content-Security-Policy', "object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   applyCors(req, res);
 
   // CORS preflight

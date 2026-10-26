@@ -65,6 +65,7 @@ const store = {
    एक जगह से बच जाती है, इसलिए वही नाम और वही खाता वापस मिलता है। */
 let DEVICE_ID = null;
 let savedNameHint = null;   /* इस फ़ोन से पहले जो नाम इस्तेमाल हुआ */
+let savedAccountHint = null; /* इस फ़ोन से जुड़े खाते का नाम + छिपा username */
 const DEV_KEY = 'jm_device';
 
 function cookieGet(name) {
@@ -528,7 +529,7 @@ function showServerDownBar() {
    (कैनवास से बनती है — कोई बाहरी सर्विस नहीं, ऑफ़लाइन भी चलती है)
    ===================================================================== */
 
-function loginCardCanvas(name, when) {
+function loginCardCanvas(name, when, recoveryCode, username) {
   const W = 1080, H = 1360;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
@@ -603,41 +604,65 @@ function loginCardCanvas(name, when) {
   }
   x.fillText(safe, cardX + 56, cardY + 300);
 
+  // Username — यही असली login-ID है, इसलिए नाम के ठीक नीचे बड़े अक्षरों में
+  const hasUsername = !!username;
+  const shiftY = hasUsername ? 46 : 0;
+  if (hasUsername) {
+    x.fillStyle = '#4b2ea8';
+    x.font = '800 42px ui-monospace, Consolas, monospace';
+    x.fillText('@' + String(username), cardX + 56, cardY + 356);
+  }
+
   // नाम के नीचे लकीर
   x.fillStyle = '#ece8ff';
-  x.fillRect(cardX + 56, cardY + 352, cardW - 112, 3);
+  x.fillRect(cardX + 56, cardY + 352 + shiftY, cardW - 112, 3);
 
   // मुख्य नोट
   const note = 'इसे अच्छे से सँभाल कर रखें —';
   const note2 = 'इसी से आप लॉगिन कर पाएंगे।';
   x.fillStyle = '#b3241c';
   x.font = '700 40px "Noto Sans Devanagari", system-ui, sans-serif';
-  x.fillText(note, cardX + 56, cardY + 424);
+  x.fillText(note, cardX + 56, cardY + 424 + shiftY);
   x.fillStyle = '#170c46';
-  x.fillText(note2, cardX + 56, cardY + 478);
+  x.fillText(note2, cardX + 56, cardY + 478 + shiftY);
 
   // सूचना बॉक्स
   x.save();
-  roundRect(x, cardX + 56, cardY + 530, cardW - 112, 168, 24);
+  roundRect(x, cardX + 56, cardY + 530 + shiftY, cardW - 112, 168, 24);
   x.fillStyle = '#f5f2ff'; x.fill();
   x.restore();
   const lines = [
-    'लॉगिन का तरीक़ा: सिर्फ़ अपना नाम लिखिए (कोई पासवर्ड नहीं)।',
-    'एक मोबाइल = एक नाम — इसी मोबाइल से यही नाम याद रखें।',
-    'यह इमेज खो गई तो नाम याद रखें, लॉगिन फिर भी हो जाएगा।',
+    'लॉगिन का तरीक़ा: ऊपर वाला username + आपका 6–10 अंकों का PIN।',
+    'इसी नाम के कई लोग हो सकते हैं — पर username सिर्फ़ आपका है।',
+    'PIN किसी को न बताएँ। भूल जाएँ तो नीचे वाला रिकवरी कोड काम आएगा।',
   ];
   x.font = '500 25px "Noto Sans Devanagari", system-ui, sans-serif';
   x.fillStyle = '#3b3266';
-  lines.forEach((ln, i) => x.fillText('•  ' + ln, cardX + 84, cardY + 586 + i * 44));
+  lines.forEach((ln, i) => x.fillText('•  ' + ln, cardX + 84, cardY + 586 + shiftY + i * 44));
+
+  // 🔐 गुप्त रिकवरी कोड (सिर्फ़ खाता बनते/पासवर्ड बदलते समय)
+  if (recoveryCode) {
+    x.save();
+    roundRect(x, cardX + 56, cardY + 714 + shiftY, cardW - 300, 96, 20);
+    x.fillStyle = '#fff4d6'; x.fill();
+    x.strokeStyle = '#e5b93e'; x.lineWidth = 2; x.stroke();
+    x.restore();
+    x.fillStyle = '#8a5a00';
+    x.font = '700 21px "Noto Sans Devanagari", system-ui, sans-serif';
+    x.fillText('गुप्त रिकवरी कोड — PIN भूलने पर यही काम आएगा', cardX + 84, cardY + 742 + shiftY);
+    x.fillStyle = '#170c46';
+    x.font = '800 40px ui-monospace, Consolas, monospace';
+    x.fillText(String(recoveryCode), cardX + 84, cardY + 782 + shiftY);
+  }
 
   // तारीख़
   x.font = '600 24px "Noto Sans Devanagari", system-ui, sans-serif';
   x.fillStyle = '#8b82b4';
-  x.fillText('लॉगिन तारीख़: ' + dateStr, cardX + 56, cardY + 760);
+  x.fillText('खाता बनने/लॉगिन की तारीख़: ' + dateStr, cardX + 56, cardY + (recoveryCode ? 852 : 760) + shiftY);
 
   // होलोग्राम-सा निशान
   x.save();
-  const hx = cardX + cardW - 190, hy = cardY + 740;
+  const hx = cardX + cardW - 190, hy = cardY + 740 + shiftY;
   const rg2 = x.createLinearGradient(hx, hy, hx + 130, hy + 130);
   rg2.addColorStop(0, '#ffd76e'); rg2.addColorStop(.5, '#ff9d4d'); rg2.addColorStop(1, '#7a5cff');
   x.beginPath(); x.arc(hx + 65, hy + 55, 62, 0, Math.PI * 2);
@@ -692,12 +717,12 @@ function openLoginCard(name, opts) {
   const first = !opts || opts.first !== false;
   let canvas;
   try {
-    canvas = loginCardCanvas(name);
+    canvas = loginCardCanvas(name, undefined, opts && opts.recoveryCode, opts && opts.username);
   } catch (err) {
     return;
   }
   const dataUrl = canvas.toDataURL('image/png');
-  const fileName = loginCardFileName(name);
+  const fileName = loginCardFileName((opts && opts.username) || name);
 
   // डाउनलोड (पहली बार लॉगिन पर अपने आप)
   if (first) {
@@ -711,10 +736,10 @@ function openLoginCard(name, opts) {
     } catch (_) {}
   }
 
-  showLoginCardModal(dataUrl, fileName, name, first);
+  showLoginCardModal(dataUrl, fileName, name, first, opts && opts.recoveryCode, opts && opts.username);
 }
 
-function showLoginCardModal(dataUrl, fileName, name, first) {
+function showLoginCardModal(dataUrl, fileName, name, first, recoveryCode, username) {
   const old = document.getElementById('loginCardModal');
   if (old) old.remove();
   const wrap = document.createElement('div');
@@ -726,7 +751,8 @@ function showLoginCardModal(dataUrl, fileName, name, first) {
       <h3>${first ? 'आपका लॉगिन कार्ड' : 'लॉगिन कार्ड'}</h3>
       <p class="lc-sub">${first ? 'इमेज डाउनलोड हो रही है — गैलरी/डाउनलोड्स में देखें।' : 'नीचे से इमेज डाउनलोड करें।'}</p>
       <img src="${dataUrl}" alt="लॉगिन कार्ड — ${esc(name)}" />
-      <div class="lc-note">🔒 <b>इसे अच्छे से सँभाल कर रखें</b> — इसी से आप लॉगिन कर पाएंगे।</div>
+      <div class="lc-note">🔒 <b>इसे अच्छे से सँभाल कर रखें</b> — लॉगिन के लिए आपका username${username ? ' <b>@' + esc(username) + '</b>' : ''} और गुप्त PIN ही आपकी चाबी है।</div>
+      ${recoveryCode ? `<div class="recovery-show"><b>🔑 आपका गुप्त रिकवरी कोड</b><code>${esc(recoveryCode)}</code><span>PIN भूल जाएँ तो सिर्फ़ इसी कोड से खाता वापस मिलेगा। यह कोड यही कार्ड पर भी लिखा है — कार्ड किसी को न दें।</span><button type="button" class="btn btn-ghost btn-sm" id="lcCopyRecovery">कोड कॉपी करें</button></div>` : ''}
       <div class="lc-actions">
         <a class="btn btn-primary" id="lcDl" download="${esc(fileName)}" href="${dataUrl}">इमेज फिर डाउनलोड करें</a>
         <button class="btn btn-ghost" id="lcClose2">बंद करें</button>
@@ -738,6 +764,10 @@ function showLoginCardModal(dataUrl, fileName, name, first) {
   document.getElementById('lcClose').addEventListener('click', close);
   document.getElementById('lcClose2').addEventListener('click', close);
   wrap.addEventListener('click', (ev) => { if (ev.target === wrap) close(); });
+  const copyBtn = document.getElementById('lcCopyRecovery');
+  if (copyBtn && recoveryCode) copyBtn.addEventListener('click', async () => {
+    toast(await copyText(recoveryCode) ? 'रिकवरी कोड कॉपी हो गया — सुरक्षित जगह रख दें' : 'कॉपी नहीं हुआ — कोड कार्ड पर लिखा है', 'ok');
+  });
 }
 
 /* --------------------------- nav / auth -------------------------- */
@@ -748,9 +778,9 @@ function renderNavAuth() {
   if (state.user) {
     const initial = (state.user.name || '?').trim().charAt(0).toUpperCase();
     box.innerHTML = `
-      <a class="user-chip" href="#/settings" title="सेटिंग्स">
+      <a class="user-chip" href="#/settings" title="${state.user.username ? '@' + esc(state.user.username) + ' · ' : ''}सेटिंग्स">
         <span class="avatar">${esc(initial)}</span>
-        <span class="user-chip-name">${esc(state.user.name)}</span>
+        <span class="user-chip-name">${esc(state.user.name)}${state.user.username ? ' <small style="opacity:.72">@' + esc(state.user.username) + '</small>' : ''}</span>
       </a>`;
   } else {
     box.innerHTML = `<a class="btn btn-ghost btn-sm" href="#/login">लॉगिन करें</a>`;
@@ -761,22 +791,195 @@ function setActiveNav(name) {
   $$('.nav-links a').forEach((a) => a.classList.toggle('active', a.dataset.nav === name));
 }
 
-async function loginWithName(name) {
-  const res = await api('/api/auth/login', { method: 'POST', body: { name, deviceId: DEVICE_ID } });
+function normalizeUsernameClient(v) {
+  return String(v || '').trim().toLowerCase().replace(/^@+/, '').replace(/\s+/g, '_');
+}
+function usernameErrorClient(v) {
+  const u = normalizeUsernameClient(v);
+  if (!u) return 'अपना username चुनें — यही आपकी असली login-ID होगी।';
+  if (!/^[a-z][a-z0-9_]{2,19}$/.test(u)) return 'Username 3–20 अक्षरों का रखें: शुरुआत अंग्रेज़ी अक्षर (a–z) से, फिर अक्षर, अंक या _ (जैसे pawan_verma)।';
+  if (u.includes('__') || u.endsWith('_')) return 'Username में लगातार दो _ या अंत में _ न रखें।';
+  return '';
+}
+function pinErrorClient(pin, username) {
+  const s = String(pin == null ? '' : pin);
+  if (!/^[0-9]{6,10}$/.test(s)) return 'PIN सिर्फ़ 6 से 10 अंकों का रखें (सिर्फ़ नंबर 0–9)।';
+  if (/^([0-9])\1+$/.test(s)) return 'PIN में सारे अंक एक जैसे न रखें।';
+  let asc = true, desc = true;
+  for (let i = 1; i < s.length; i++) {
+    const d = Number(s[i]) - Number(s[i - 1]);
+    if (d !== 1) asc = false;
+    if (d !== -1) desc = false;
+  }
+  const common = ['123456','654321','1234567','12345678','123456789','1234567890','987654','9876543210','112233','121212','123123','111111','000000','102030','246810','135790'];
+  if (asc || desc || common.includes(s)) return 'यह PIN बहुत आम है — कोई ऐसा नंबर चुनें जो सिर्फ़ आपको याद रहे।';
+  if (username && normalizeUsernameClient(username).includes(s)) return 'PIN अपने username जैसा न रखें।';
+  return '';
+}
+
+async function checkUsernameNow(input, statusEl) {
+  if (!input || !statusEl) return { unknown: true };
+  const u = normalizeUsernameClient(input.value);
+  input.value = u;
+  const err = usernameErrorClient(u);
+  if (err) {
+    input.dataset.usernameState = 'invalid';
+    statusEl.innerHTML = '<span class="u-bad">⚠ ' + esc(err) + '</span>';
+    return { available: false, valid: false, error: err, username: u };
+  }
+  const seq = (Number(input.dataset.checkSeq || 0) + 1);
+  input.dataset.checkSeq = String(seq);
+  input.dataset.usernameState = 'checking';
+  statusEl.innerHTML = '<span class="u-wait">जाँच रहे हैं कि @' + esc(u) + ' खाली है या नहीं…</span>';
+  try {
+    const data = await api('/api/auth/username-available?u=' + encodeURIComponent(u));
+    if (Number(input.dataset.checkSeq || 0) !== seq) return data;
+    if (data.available) {
+      input.dataset.usernameState = 'available';
+      statusEl.innerHTML = '<span class="u-ok">✓ @' + esc(data.username || u) + ' उपलब्ध है — यह आपका हो सकता है।</span>';
+    } else {
+      input.dataset.usernameState = 'taken';
+      const sug = Array.isArray(data.suggestions) ? data.suggestions : [];
+      statusEl.innerHTML = '<span class="u-bad">✕ ' + esc(data.error || 'यह username पहले से उपयोग में है।') + '</span>'
+        + (sug.length ? '<span class="u-sugs">खाली सुझाव: ' + sug.map((s) => '<button type="button" class="username-suggestion" data-username-suggestion="' + esc(s) + '">@' + esc(s) + '</button>').join(' ') + '</span>' : '');
+    }
+    return data;
+  } catch (e) {
+    if (Number(input.dataset.checkSeq || 0) !== seq) return { unknown: true };
+    input.dataset.usernameState = 'unknown';
+    statusEl.innerHTML = '<span class="u-wait">अभी जाँच नहीं हो पाई — आगे बढ़ने पर सर्वर अंतिम जाँच करेगा।</span>';
+    return { unknown: true, error: e.message };
+  }
+}
+
+function bindUsernameAvailability(input, statusEl) {
+  if (!input || !statusEl) return;
+  input.addEventListener('input', () => {
+    const before = input.value;
+    const cleaned = normalizeUsernameClient(before);
+    if (before !== cleaned) input.value = cleaned;
+    input.dataset.usernameState = 'typing';
+    clearTimeout(input._usernameTimer);
+    if (!cleaned) { statusEl.textContent = ''; return; }
+    const err = usernameErrorClient(cleaned);
+    statusEl.innerHTML = err
+      ? '<span class="u-bad">⚠ ' + esc(err) + '</span>'
+      : '<span class="u-wait">जाँच रहे हैं…</span>';
+    input._usernameTimer = setTimeout(() => { checkUsernameNow(input, statusEl); }, 380);
+  });
+  input.addEventListener('blur', () => {
+    if (normalizeUsernameClient(input.value)) checkUsernameNow(input, statusEl);
+  });
+  statusEl.addEventListener('click', (ev) => {
+    const b = ev.target && ev.target.closest ? ev.target.closest('[data-username-suggestion]') : null;
+    if (!b) return;
+    input.value = b.dataset.usernameSuggestion;
+    input.focus();
+    checkUsernameNow(input, statusEl);
+  });
+}
+
+function applyAuthResponse(res) {
   state.user = res.user;
   state.token = res.token;
   state.quota = res.quota;
   store.set('jm_token', res.token);
   renderNavAuth();
-  /* 🟢 इस फ़ोन से पहले बिना लॉगिन जो वोट पड़े थे, वे अब इस नाम से जुड़ गए */
+  /* 🟢 इस फ़ोन से पहले बिना लॉगिन जो वोट पड़े थे, वे अब इस खाते से जुड़ गए */
   if (res.adoptedVotes) {
     setTimeout(() => {
-      toast(res.adoptedVotes + ' पहले वाला वोट अब आपके नाम (' + res.user.name + ') से जुड़ गया', 'ok');
+      toast(res.adoptedVotes + ' पहले वाला मेहमान-वोट अब ' + res.user.name + (res.user.username ? ' (@' + res.user.username + ')' : '') + ' से जुड़ गया — गिनती एक ही रहेगी।', 'ok');
     }, 1100);
   }
-  /* 🎴 नाम वाली लॉगिन इमेज — सँभाल कर रखने के लिए (अपने आप डाउनलोड) */
-  try { openLoginCard(res.user.name, { first: true }); } catch (_) {}
+  /* 🎴 रिकवरी कोड वाला लॉगिन कार्ड — सिर्फ़ खाता बनते/claim/recovery पर */
+  if (res.recoveryCode) {
+    try { openLoginCard(res.user.name, { first: true, recoveryCode: res.recoveryCode, username: res.user.username }); } catch (_) {}
+  } else if (res.user && !res.user.username) {
+    setTimeout(() => maybePromptUsername(), 700);
+  }
   return res;
+}
+
+async function loginWithCredentials(username, password) {
+  const res = await api('/api/auth/login', { method: 'POST', body: { username: normalizeUsernameClient(username), password, deviceId: DEVICE_ID } });
+  return applyAuthResponse(res);
+}
+
+async function registerWithCredentials(name, username, password) {
+  const res = await api('/api/auth/register', { method: 'POST', body: { name, username: normalizeUsernameClient(username), password, deviceId: DEVICE_ID } });
+  return applyAuthResponse(res);
+}
+
+async function migrateOldAccount(data) {
+  const res = await api('/api/auth/migrate', { method: 'POST', body: { ...data, username: normalizeUsernameClient(data.username), deviceId: DEVICE_ID } });
+  return applyAuthResponse(res);
+}
+
+async function recoverWithCode(username, recoveryCode, newPassword) {
+  const res = await api('/api/auth/recover', { method: 'POST', body: { username: normalizeUsernameClient(username), recoveryCode, newPassword, deviceId: DEVICE_ID } });
+  return applyAuthResponse(res);
+}
+
+/* पुराने सत्र से लॉगिन उपयोगकर्ता के लिए पहली बार username चुनना */
+let usernamePromptShown = false;
+function maybePromptUsername() {
+  if (!state.user || state.user.username || usernamePromptShown) return;
+  usernamePromptShown = true;
+  showUsernameSetupModal();
+}
+function showUsernameSetupModal() {
+  if (!state.user) return;
+  const old = document.getElementById('usernameSetupModal');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'lc-overlay';
+  wrap.id = 'usernameSetupModal';
+  wrap.innerHTML = `
+    <div class="lc-modal username-modal" role="dialog" aria-modal="true" aria-label="अपना username चुनें">
+      <button class="lc-x" id="usernameSetupClose" aria-label="बंद करें">✕</button>
+      <h3>अपना Username चुनें</h3>
+      <p class="lc-sub">अब लॉगिन <b>username + PIN</b> से होता है। आपका नाम (${esc(state.user.name)}) प्रोफ़ाइल में वैसे ही रहेगा — username आपकी स्थायी login-ID होगी, जो किसी और के पास नहीं हो सकती।</p>
+      <input id="setupUsername" type="text" placeholder="username जैसे pawan_verma" maxlength="20" autocomplete="username" aria-label="Username" autocapitalize="none" spellcheck="false" />
+      <div id="setupUsernameStatus" class="username-status" aria-live="polite"></div>
+      <div class="lc-actions">
+        <button class="btn btn-primary" id="setupUsernameSave" type="button">Username पक्का करें</button>
+        <button class="btn btn-ghost" id="setupUsernameLater" type="button">बाद में</button>
+      </div>
+      <p class="muted small">ध्यान दें: username एक बार तय होने के बाद बदलेगा नहीं। ध्यान से चुनें और लॉगिन कार्ड पर रख लें।</p>
+    </div>`;
+  document.body.appendChild(wrap);
+  const input = document.getElementById('setupUsername');
+  const status = document.getElementById('setupUsernameStatus');
+  const save = document.getElementById('setupUsernameSave');
+  bindUsernameAvailability(input, status);
+  const close = () => wrap.remove();
+  document.getElementById('usernameSetupClose').addEventListener('click', close);
+  document.getElementById('setupUsernameLater').addEventListener('click', close);
+  wrap.addEventListener('click', (ev) => { if (ev.target === wrap) close(); });
+  save.addEventListener('click', async () => {
+    const u = normalizeUsernameClient(input.value);
+    const err = usernameErrorClient(u);
+    if (err) return toast(err, 'err');
+    save.disabled = true;
+    save.textContent = 'जाँच रहे हैं…';
+    try {
+      const chk = await checkUsernameNow(input, status);
+      if (chk && chk.available === false) throw new Error(chk.error || 'यह username पहले से उपयोग में है।');
+      const res = await api('/api/auth/set-username', { method: 'POST', body: { username: u } });
+      state.user = res.user;
+      state.quota = res.quota || state.quota;
+      renderNavAuth();
+      close();
+      toast('आपका username @' + res.user.username + ' बन गया। अब लॉगिन इसी से होगा।', 'ok');
+      if (String(location.hash || '').startsWith('#/settings')) route();
+    } catch (e) {
+      toast(e.message, 'err');
+      if (e.code === 'USERNAME_TAKEN') checkUsernameNow(input, status);
+    }
+    save.disabled = false;
+    save.textContent = 'Username पक्का करें';
+  });
+  setTimeout(() => input.focus(), 60);
 }
 
 async function logoutUser() {
@@ -785,24 +988,17 @@ async function logoutUser() {
   state.token = null;
   state.quota = null;
   store.del('jm_token');
+  usernamePromptShown = false;
   renderNavAuth();
   toast('लॉगआउट हो गया', 'ok');
   location.hash = '#/';
 }
 
-/* 🟢 इस फ़ोन से पहले जो लॉगिन कर चुका है, उसे फिर नाम न लिखना पड़े */
+/* 🔐 इस फ़ोन पर पहले चला नाम सिर्फ़ सुझाव के लिए — बिना पासवर्ड अपने आप लॉगिन अब नहीं */
 async function tryAutoLogin() {
   if (state.token) return { ok: true, already: true };
   try {
     const res = await api('/api/auth/auto', { method: 'POST', body: { deviceId: DEVICE_ID } });
-    if (res.ok && res.token) {
-      state.user = res.user;
-      state.token = res.token;
-      state.quota = res.quota;
-      store.set('jm_token', res.token);
-      renderNavAuth();
-      return { ok: true, user: res.user };
-    }
     return { ok: false, hint: res.hint || null };
   } catch (_) { return { ok: false, hint: null }; }
 }
@@ -814,6 +1010,7 @@ async function refreshMe() {
     state.user = me.user;
     state.quota = me.quota;
     renderNavAuth();
+    if (state.user && !state.user.username) setTimeout(() => maybePromptUsername(), 900);
     return me;
   } catch (err) {
     if (err.status === 401) {
@@ -831,95 +1028,400 @@ async function refreshMe() {
    ===================================================================== */
 
 function loginCardHTML(opts = {}) {
-  const title = opts.title || 'वोट देने के लिए लॉगिन करें';
-  const sub = opts.sub || 'सिर्फ़ अपना नाम लिखिए — कोई पासवर्ड, OTP या ईमेल नहीं।';
+  const title = opts.title || 'Username + PIN से लॉगिन';
+  const sub = opts.sub || 'मोबाइल नंबर, Gmail या OTP नहीं लगेगा। आपका नाम प्रोफ़ाइल में दिखेगा — लॉगिन आपकी स्थायी username-ID और 6–10 अंकों के गुप्त PIN से होगा।';
   return `
   <div class="panel login-card" id="inlineLogin">
     <div class="login-card-ico">${ICON.user}</div>
     <h3>${esc(title)}</h3>
     <p class="muted">${esc(sub)}</p>
-    <form id="inlineLoginForm" autocomplete="off">
-      <input id="inlineName" type="text" placeholder="आपका नाम (जैसे: रवि शर्मा)" maxlength="30" aria-label="आपका नाम" />
+    <form id="inlineLoginForm" autocomplete="on">
+      <div class="auth-tabs auth-tabs-3" role="tablist" aria-label="लॉगिन, नया खाता या पुराना खाता">
+        <button type="button" class="auth-tab active" data-auth-mode="login">लॉगिन</button>
+        <button type="button" class="auth-tab" data-auth-mode="register">नया खाता</button>
+        <button type="button" class="auth-tab" data-auth-mode="old">पुराना खाता</button>
+      </div>
+
+      <div id="authLoginFields">
+        <label class="auth-label" for="inlineUsernameLogin">आपका Username</label>
+        <input id="inlineUsernameLogin" type="text" placeholder="जैसे pawan_verma" maxlength="20" aria-label="Username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        <label class="auth-label" for="inlinePinLogin">गुप्त PIN / पासवर्ड</label>
+        <input id="inlinePinLogin" type="password" placeholder="आपका PIN लिखें" maxlength="64" aria-label="PIN या पासवर्ड" autocomplete="current-password" />
+      </div>
+
+      <div id="authRegisterFields" hidden>
+        <label class="auth-label" for="inlineName">आपका असली नाम (प्रोफ़ाइल में दिखेगा)</label>
+        <input id="inlineName" type="text" placeholder="जैसे: रवि शर्मा" maxlength="30" aria-label="आपका असली नाम" autocomplete="name" />
+        <label class="auth-label" for="inlineUsername">अपना Username चुनें (सिर्फ़ आपका, हमेशा के लिए)</label>
+        <input id="inlineUsername" type="text" placeholder="जैसे Ravi Verma" maxlength="20" aria-label="नया username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        <div id="inlineUsernameStatus" class="username-status" aria-live="polite"></div>
+        <label class="auth-label" for="inlinePassword">6–10 अंकों का गुप्त PIN बनाएँ</label>
+        <input id="inlinePassword" type="password" inputmode="numeric" placeholder="सिर्फ़ नंबर, 6–10 अंक" maxlength="10" aria-label="नया PIN" autocomplete="new-password" />
+        <input id="inlinePasswordConfirm" type="password" inputmode="numeric" placeholder="वही PIN दोबारा लिखें" maxlength="10" aria-label="PIN दोबारा" autocomplete="new-password" />
+      </div>
+
+      <div id="authOldFields" hidden>
+        <p class="auth-help">पहले सिर्फ़ नाम या नाम+पासवर्ड से खाता चला था? वही पुराना नाम (और बना हो तो पुराना पासवर्ड) लिखकर, अब अपना स्थायी username + PIN लगा लीजिए। आपके चुनाव और वोट उसी खाते में रहेंगे।</p>
+        <label class="auth-label" for="inlineOldName">पुराना नाम (ठीक वही जो पहले चलता था)</label>
+        <input id="inlineOldName" type="text" placeholder="आपका पुराना नाम" maxlength="30" aria-label="पुराना नाम" autocomplete="name" />
+        <label class="auth-label" for="inlineOldPassword">पुराना पासवर्ड (अगर बनाया था)</label>
+        <input id="inlineOldPassword" type="password" placeholder="पुराना पासवर्ड — न बना हो तो खाली छोड़ें" maxlength="64" aria-label="पुराना पासवर्ड" autocomplete="current-password" />
+        <label class="auth-label" for="inlineOldUsername">नया Username चुनें</label>
+        <input id="inlineOldUsername" type="text" placeholder="जैसे Ravi Verma" maxlength="20" aria-label="पुराने खाते के लिए username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        <div id="inlineOldUsernameStatus" class="username-status" aria-live="polite"></div>
+        <label class="auth-label" for="inlineOldPin">नया 6–10 अंकों का PIN</label>
+        <input id="inlineOldPin" type="password" inputmode="numeric" placeholder="सिर्फ़ नंबर, 6–10 अंक" maxlength="10" aria-label="नया PIN" autocomplete="new-password" />
+        <input id="inlineOldPinConfirm" type="password" inputmode="numeric" placeholder="वही PIN दोबारा लिखें" maxlength="10" aria-label="नया PIN दोबारा" autocomplete="new-password" />
+      </div>
+
       <button class="btn btn-primary" type="submit" id="inlineLoginBtn">लॉगिन करें</button>
     </form>
-    <p class="login-note">एक नाम = एक खाता, और एक मोबाइल = एक नाम। वही नाम दोबारा लिखें जिससे आप आगे भी लॉगिन करेंगे।</p>
-    <p class="login-note thin">लॉगिन करते ही आपके नाम वाली एक इमेज (लॉगिन कार्ड) डाउनलोड होगी — उसे सँभाल कर रखें।</p>
+
+    <div class="auth-links">
+      <button type="button" class="linklike" id="inlineForgot">PIN भूल गए?</button>
+      <button type="button" class="linklike" id="inlineForgotUsername">Username भूल गए / दूसरा खाता चाहिए?</button>
+    </div>
+
+    <div id="inlineRecover" class="recover-box" hidden>
+      <h4>🔑 रिकवरी कोड से नया PIN</h4>
+      <p class="muted small">अपना <b>username</b>, लॉगिन कार्ड पर लिखा <b>गुप्त रिकवरी कोड</b> और नया 6–10 अंकों का PIN डालें। सिर्फ़ username से PIN नहीं बदलेगा — कोड ज़रूरी है।</p>
+      <input id="inlineRecoverUsername" type="text" placeholder="आपका username" maxlength="20" aria-label="रिकवरी के लिए username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+      <input id="inlineRecoveryCode" type="text" placeholder="रिकवरी कोड (जैसे ABCD-EFGH-JKLM)" maxlength="20" aria-label="रिकवरी कोड" autocomplete="off" style="text-transform:uppercase" />
+      <input id="inlineNewPassword" type="password" inputmode="numeric" placeholder="नया PIN (6–10 अंक)" maxlength="10" aria-label="नया PIN" autocomplete="new-password" />
+      <input id="inlineNewPasswordConfirm" type="password" inputmode="numeric" placeholder="नया PIN दोबारा" maxlength="10" aria-label="नया PIN दोबारा" autocomplete="new-password" />
+      <button type="button" class="btn btn-dark" id="inlineRecoverBtn">रिकवरी कोड से लॉगिन करें</button>
+    </div>
+
+    <div id="inlineAppeal" class="recover-box appeal-box" hidden>
+      <h4>🙋 Username भूल गए या साझा फ़ोन?</h4>
+      <p class="muted small">पहले इसी फ़ोन से जुड़े खाते का छिपा संकेत देखिए। फिर भी याद न आए, तो नीचे आवेदन भेजिए — खाता तुरंत नहीं बनेगा; <b>Team Janmat जाँचकर मंज़ूरी देगी</b>, तब तक आवेदन Pending रहेगा।</p>
+      <button type="button" class="btn btn-ghost btn-sm" id="inlineHintBtn">इस फ़ोन का username-संकेत देखें</button>
+      <div id="inlineHintResult" class="appeal-result" aria-live="polite"></div>
+
+      <label class="auth-label" for="inlineAppealKind">आवेदन की वजह</label>
+      <select id="inlineAppealKind" aria-label="आवेदन की वजह">
+        <option value="forgot-username">मैं अपना username भूल गया/गई</option>
+        <option value="device-second-account">यही फ़ोन परिवार के दूसरे सदस्य का भी है — अलग खाता चाहिए</option>
+      </select>
+      <input id="inlineAppealName" type="text" placeholder="आपका असली नाम" maxlength="30" aria-label="आवेदन के लिए नाम" autocomplete="name" />
+      <input id="inlineAppealUsername" type="text" placeholder="चाहा गया नया username" maxlength="20" aria-label="चाहा गया username" autocomplete="username" autocapitalize="none" spellcheck="false" />
+      <div id="inlineAppealUsernameStatus" class="username-status" aria-live="polite"></div>
+      <input id="inlineAppealPin" type="password" inputmode="numeric" placeholder="नया PIN (6–10 अंक) — मंज़ूरी के बाद यही चलेगा" maxlength="10" aria-label="आवेदन का PIN" autocomplete="new-password" />
+      <input id="inlineAppealPinConfirm" type="password" inputmode="numeric" placeholder="वही PIN दोबारा" maxlength="10" aria-label="आवेदन PIN दोबारा" autocomplete="new-password" />
+      <textarea id="inlineAppealReason" rows="3" maxlength="300" placeholder="कारण साफ़ लिखें — जैसे: पुराना username भूल गया, फ़ोन यही है, पहला खाता 2026 में बना था…" aria-label="आवेदन का कारण"></textarea>
+      <button type="button" class="btn btn-dark" id="inlineApplyBtn">Team Janmat को आवेदन भेजें</button>
+      <div id="inlineApplyResult" class="appeal-result" aria-live="polite"></div>
+
+      <div class="appeal-status-box">
+        <h5>आवेदन की स्थिति देखें</h5>
+        <input id="inlineAppId" type="text" placeholder="आवेदन नंबर (जैसे APP-XXXX)" maxlength="24" aria-label="आवेदन नंबर" style="text-transform:uppercase" />
+        <input id="inlineAppReceipt" type="text" placeholder="रसीद कोड (अगर है)" maxlength="60" aria-label="आवेदन रसीद" autocomplete="off" />
+        <button type="button" class="btn btn-ghost btn-sm" id="inlineAppStatusBtn">स्थिति देखें</button>
+        <div id="inlineAppStatusResult" class="appeal-result" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <p class="login-note" id="inlineAuthNote">अपने username और PIN से लॉगिन करें। सिर्फ़ नाम लिखकर अब कोई किसी के खाते में नहीं जा सकता।</p>
+    <p class="login-note thin">एक जैसे नाम के कई लोग हो सकते हैं, लेकिन username पूरी Janmat में सिर्फ़ एक व्यक्ति का होता है। अगर @pawan_verma किसी ने ले लिया, तो दूसरा वही username नहीं बना सकता।</p>
+    <p class="login-note thin">🔒 एक फ़ोन पर सीधे एक ही खाता बनेगा। परिवार के दूसरे सदस्य के लिए ऊपर वाले आवेदन से Team Janmat की मंज़ूरी लेनी होगी।</p>
     <p class="login-note thin">आगे बढ़ने पर आप <a href="#/disclaimer">डिस्क्लेमर व नियम</a> स्वीकार करते हैं।</p>
   </div>`;
 }
 
-/* अगर इस मोबाइल पर पहले कोई दूसरा नाम बँधा है — पुराना नाम लिखकर बदलने का रास्ता
-   (वरना फ़ोन हमेशा के लिए उसी नाम पर अटक जाता था) */
-function askRebind(ownerName, desiredName, onDone) {
-  const old = document.getElementById('rebindModal');
-  if (old) old.remove();
-  const wrap = document.createElement('div');
-  wrap.className = 'lc-overlay';
-  wrap.id = 'rebindModal';
-  wrap.innerHTML = `
-    <div class="lc-modal" style="text-align:left">
-      <h3 style="text-align:center">इस मोबाइल का नाम बदलें</h3>
-      <p class="lc-sub" style="text-align:center">इस मोबाइल से पहले ${ownerName ? '<b>' + esc(ownerName) + '</b>' : 'किसी और'} नाम से लॉगिन हुआ था।<br>नाम बदलने के लिए वही पुराना नाम नीचे लिखें।</p>
-      <input id="rebindOld" type="text" placeholder="पुराना नाम" maxlength="40" style="width:100%;padding:12px;border-radius:12px;border:1.5px solid #e2e0f2;font:inherit" />
-      <p class="lc-note">पुराना नाम याद नहीं? दूसरे मोबाइल से लॉगिन करें, या डेवलपर से कहें।</p>
-      <div class="lc-actions">
-        <button class="btn btn-primary" id="rebindGo">नाम बदलकर लॉगिन करें</button>
-        <button class="btn btn-ghost" id="rebindCancel">रद्द करें</button>
-      </div>
-      <div class="lc-urls" id="rebindMsg"></div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const close = () => wrap.remove();
-  document.getElementById('rebindCancel').addEventListener('click', close);
-  document.getElementById('rebindOld').focus();
-  document.getElementById('rebindGo').addEventListener('click', async () => {
-    const oldName = document.getElementById('rebindOld').value.trim();
-    const msg = document.getElementById('rebindMsg');
-    if (oldName.length < 2) { msg.textContent = 'पुराना नाम लिखें।'; return; }
-    const btn = document.getElementById('rebindGo');
-    btn.disabled = true;
-    btn.textContent = 'बदल रहे हैं…';
-    try {
-      await api('/api/auth/rebind', { method: 'POST', body: { deviceId: DEVICE_ID, oldName } });
-      const res = await loginWithName(desiredName);
-      close();
-      toast('इस मोबाइल का नाम बदल गया — स्वागत है, ' + res.user.name + '!', 'ok');
-      if (onDone) onDone();
-    } catch (e) {
-      msg.textContent = e.message;
-      btn.disabled = false;
-      btn.textContent = 'नाम बदलकर लॉगिन करें';
+function bindLoginCard(onDone) {
+  const form = document.getElementById('inlineLoginForm');
+  const appealBox = document.getElementById('inlineAppeal');
+  const openAppeal = () => {
+    if (!appealBox) return;
+    appealBox.hidden = false;
+    appealBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const hb = document.getElementById('inlineHintBtn');
+    if (hb) setTimeout(() => hb.focus(), 250);
+  };
+  ['useSavedName', 'showSavedUsernameHint'].forEach((id) => {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener('click', openAppeal);
+  });
+  if (!form) return;
+
+  const byId = (id) => document.getElementById(id);
+  const loginUsername = byId('inlineUsernameLogin');
+  const loginPin = byId('inlinePinLogin');
+  const regName = byId('inlineName');
+  const regUsername = byId('inlineUsername');
+  const regUsernameStatus = byId('inlineUsernameStatus');
+  const regPin = byId('inlinePassword');
+  const regPin2 = byId('inlinePasswordConfirm');
+  const oldName = byId('inlineOldName');
+  const oldPassword = byId('inlineOldPassword');
+  const oldUsername = byId('inlineOldUsername');
+  const oldUsernameStatus = byId('inlineOldUsernameStatus');
+  const oldPin = byId('inlineOldPin');
+  const oldPin2 = byId('inlineOldPinConfirm');
+  const btn = byId('inlineLoginBtn');
+  const note = byId('inlineAuthNote');
+  let mode = 'login';
+
+  const restrictPin = (el) => {
+    if (!el) return;
+    el.addEventListener('input', () => { el.value = String(el.value).replace(/[^0-9]/g, '').slice(0, 10); });
+  };
+  [regPin, regPin2, oldPin, oldPin2, byId('inlineNewPassword'), byId('inlineNewPasswordConfirm'), byId('inlineAppealPin'), byId('inlineAppealPinConfirm')].forEach(restrictPin);
+  /* पुराने बने username-खातों में पुराना अक्षर-पासवर्ड रह सकता है इसलिए login field पर सिर्फ़-अंक रोक नहीं लगाते। */
+
+  bindUsernameAvailability(regUsername, regUsernameStatus);
+  bindUsernameAvailability(oldUsername, oldUsernameStatus);
+  bindUsernameAvailability(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
+
+  const ensureAvailable = async (input, status) => {
+    const u = normalizeUsernameClient(input.value);
+    input.value = u;
+    const err = usernameErrorClient(u);
+    if (err) throw new Error(err);
+    if (input.dataset.usernameState === 'taken') {
+      throw new Error('यह username (@' + u + ') पहले से उपयोग में है — कोई दूसरा चुनें।');
+    }
+    if (input.dataset.usernameState !== 'available') {
+      const chk = await checkUsernameNow(input, status);
+      if (chk && chk.available === false) throw new Error(chk.error || 'यह username पहले से उपयोग में है।');
+    }
+    return u;
+  };
+
+  const checkPinPair = (pinEl, pin2El, username) => {
+    const pin = pinEl.value;
+    const err = pinErrorClient(pin, username);
+    if (err) throw new Error(err);
+    if (pin !== pin2El.value) throw new Error('दोनों PIN एक जैसे नहीं हैं — फिर से ध्यान से लिखें।');
+    return pin;
+  };
+
+  const setMode = (m) => {
+    mode = (m === 'register' || m === 'old') ? m : 'login';
+    $$('.auth-tab', form).forEach((b) => b.classList.toggle('active', b.dataset.authMode === mode));
+    byId('authLoginFields').hidden = mode !== 'login';
+    byId('authRegisterFields').hidden = mode !== 'register';
+    byId('authOldFields').hidden = mode !== 'old';
+    btn.textContent = mode === 'register'
+      ? 'मेरा नया खाता बनाएँ'
+      : mode === 'old'
+        ? 'पुराने खाते में Username लगाएँ'
+        : 'लॉगिन करें';
+    if (note) note.textContent = mode === 'register'
+      ? 'नया खाता: असली नाम प्रोफ़ाइल के लिए है; username आपकी एकमात्र login-ID होगी और PIN उसकी चाबी। एक फ़ोन पर सीधे एक ही खाता बनेगा।'
+      : mode === 'old'
+        ? 'पुराना खाता: नाम ठीक वही लिखें जो पहले चलता था। पासवर्ड बनाया था तो वह भी लगेगा; बिना-पासवर्ड पुराना खाता सिर्फ़ अपने जुड़े फ़ोन से मिलेगा।'
+        : 'अपने username और PIN से लॉगिन करें। सिर्फ़ नाम लिखकर अब कोई किसी के खाते में नहीं जा सकता।';
+    const focusEl = mode === 'register' ? regName : mode === 'old' ? oldName : loginUsername;
+    if (focusEl) setTimeout(() => focusEl.focus(), 30);
+  };
+  $$('.auth-tab', form).forEach((b) => b.addEventListener('click', () => setMode(b.dataset.authMode)));
+
+  const forgot = byId('inlineForgot');
+  const recBox = byId('inlineRecover');
+  if (forgot && recBox) forgot.addEventListener('click', () => {
+    recBox.hidden = !recBox.hidden;
+    if (!recBox.hidden) {
+      const ru = byId('inlineRecoverUsername');
+      if (ru && !ru.value && loginUsername) ru.value = normalizeUsernameClient(loginUsername.value);
+      const c = byId('inlineRecoveryCode');
+      if (c) c.focus();
     }
   });
-}
-
-function bindLoginCard(onDone) {
-  const savedBtn = document.getElementById('useSavedName');
-  if (savedBtn) savedBtn.addEventListener('click', () => {
-    const inp = document.getElementById('loginName');
-    if (inp) { inp.value = savedNameHint || ''; inp.focus(); }
-  });
-  const form = document.getElementById('inlineLoginForm');
-  if (!form) return;
-  const input = document.getElementById('inlineName');
-  const btn = document.getElementById('inlineLoginBtn');
-  input.focus();
-  form.addEventListener('submit', async (ev) => {
-    ev.preventDefault();
-    const name = input.value.trim();
-    if (name.length < 2) return toast('कम से कम 2 अक्षरों का नाम लिखें', 'err');
-    btn.disabled = true;
-    btn.textContent = 'लॉगिन…';
+  const recBtn = byId('inlineRecoverBtn');
+  if (recBtn) recBtn.addEventListener('click', async () => {
+    recBtn.disabled = true;
+    recBtn.textContent = 'जाँच रहे हैं…';
     try {
-      await loginWithName(name);
-      toast('स्वागत है, ' + state.user.name + '!', 'ok');
+      const username = normalizeUsernameClient(byId('inlineRecoverUsername').value);
+      const uErr = usernameErrorClient(username);
+      if (uErr) throw new Error(uErr);
+      const code = byId('inlineRecoveryCode').value.trim();
+      if (!code) throw new Error('लॉगिन कार्ड वाला रिकवरी कोड लिखें।');
+      const newPw = checkPinPair(byId('inlineNewPassword'), byId('inlineNewPasswordConfirm'), username);
+      const res = await recoverWithCode(username, code, newPw);
+      toast('PIN बदल गया — स्वागत है, ' + res.user.name + ' (@' + res.user.username + ')! नया कार्ड सँभाल लें।', 'ok');
       if (onDone) onDone();
     } catch (e) {
       toast(e.message, 'err');
-      btn.disabled = false;
-      btn.textContent = 'लॉगिन करें';
-      if (e.code === 'DEVICE_TAKEN') askRebind((e.data && e.data.ownerName) || '', name, onDone);
     }
+    recBtn.disabled = false;
+    recBtn.textContent = 'रिकवरी कोड से लॉगिन करें';
+  });
+
+  const forgotUsername = byId('inlineForgotUsername');
+  if (forgotUsername && appealBox) forgotUsername.addEventListener('click', () => {
+    appealBox.hidden = !appealBox.hidden;
+    if (!appealBox.hidden) appealBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  try {
+    const savedApp = JSON.parse(store.get('jm_application') || 'null');
+    if (savedApp && savedApp.applicationId) {
+      byId('inlineAppId').value = savedApp.applicationId;
+      if (savedApp.receipt) byId('inlineAppReceipt').value = savedApp.receipt;
+      byId('inlineAppStatusResult').innerHTML = '📌 आपका पिछला आवेदन <b>' + esc(savedApp.applicationId) + '</b> इस फ़ोन पर याद है — “स्थिति देखें” दबाकर जाँच लें।';
+    }
+  } catch (_) {}
+
+  const hintBtn = byId('inlineHintBtn');
+  if (hintBtn) hintBtn.addEventListener('click', async () => {
+    hintBtn.disabled = true;
+    hintBtn.textContent = 'देख रहे हैं…';
+    const out = byId('inlineHintResult');
+    try {
+      const res = await api('/api/auth/username-hint', { method: 'POST', body: { deviceId: DEVICE_ID } });
+      if (res.ok && Array.isArray(res.hints) && res.hints.length) {
+        out.innerHTML = 'इस फ़ोन से जुड़े खाते:<br>' + res.hints.map((h) => '• <b>' + esc(h.name) + '</b> — username <b>' + esc(h.usernameMasked) + '</b>').join('<br>')
+          + '<br><span class="muted small">पूरा username लॉगिन कार्ड पर लिखा होता है। सुरक्षा के लिए यहाँ पूरा नहीं दिखता।</span>';
+      } else {
+        out.textContent = res.message || 'इस फ़ोन से कोई खाता जुड़ा नहीं मिला।';
+      }
+    } catch (e) {
+      out.textContent = e.message;
+    }
+    hintBtn.disabled = false;
+    hintBtn.textContent = 'इस फ़ोन का username-संकेत देखें';
+  });
+
+  const applyBtn = byId('inlineApplyBtn');
+  if (applyBtn) applyBtn.addEventListener('click', async () => {
+    applyBtn.disabled = true;
+    applyBtn.textContent = 'आवेदन भेज रहे हैं…';
+    const out = byId('inlineApplyResult');
+    try {
+      const name = byId('inlineAppealName').value.trim();
+      if (name.length < 2) throw new Error('अपना असली नाम लिखें।');
+      const username = await ensureAvailable(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
+      const pin = checkPinPair(byId('inlineAppealPin'), byId('inlineAppealPinConfirm'), username);
+      const reason = byId('inlineAppealReason').value.trim();
+      if (reason.length < 8) throw new Error('कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर)।');
+      const res = await api('/api/auth/apply', {
+        method: 'POST',
+        body: { kind: byId('inlineAppealKind').value, name, username, password: pin, reason, deviceId: DEVICE_ID },
+      });
+      store.set('jm_application', JSON.stringify({ applicationId: res.applicationId, receipt: res.receipt, username, at: Date.now() }));
+      byId('inlineAppId').value = res.applicationId;
+      byId('inlineAppReceipt').value = res.receipt;
+      const receiptText = [
+        'A2Z Janmat — खाता आवेदन रसीद',
+        'आवेदन नंबर: ' + res.applicationId,
+        'नाम: ' + name,
+        'चाहा गया username: @' + username,
+        'रसीद कोड: ' + res.receipt,
+        'गुप्त रिकवरी कोड: ' + res.recoveryCode,
+        '',
+        'PIN आपने खुद चुना था — सुरक्षा के लिए यहाँ नहीं लिखा है।',
+        'खाता अभी Pending है। Team Janmat की मंज़ूरी के बाद इसी username + PIN से लॉगिन होगा।',
+        'रिकवरी कोड किसी को न दें।',
+      ].join('\n');
+      out.innerHTML = `<div class="recovery-show">
+        <b>✅ आवेदन मिल गया — अभी Pending है</b>
+        <span>आवेदन नंबर: <b>${esc(res.applicationId)}</b><br>Username: <b>@${esc(username)}</b></span>
+        <span>रसीद कोड:</span><code>${esc(res.receipt)}</code>
+        <span>🔑 गुप्त रिकवरी कोड (मंज़ूरी के बाद काम आएगा):</span><code>${esc(res.recoveryCode)}</code>
+        <span>${esc(res.message || 'Team Janmat जाँच करेगी।')}</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="downloadApplicationReceipt">रसीद डाउनलोड करें</button>
+      </div>`;
+      const dl = byId('downloadApplicationReceipt');
+      if (dl) dl.addEventListener('click', () => downloadFile('janmat-application-' + res.applicationId + '.txt', receiptText, 'text/plain;charset=utf-8'));
+      toast('आवेदन Team Janmat के पास Pending है। रसीद और रिकवरी कोड सँभाल लें।', 'ok');
+    } catch (e) {
+      toast(e.message, 'err');
+      if (e.code === 'USERNAME_TAKEN') checkUsernameNow(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
+      if (e.data && e.data.applicationId) {
+        byId('inlineAppId').value = e.data.applicationId;
+      }
+    }
+    applyBtn.disabled = false;
+    applyBtn.textContent = 'Team Janmat को आवेदन भेजें';
+  });
+
+  const statusBtn = byId('inlineAppStatusBtn');
+  if (statusBtn) statusBtn.addEventListener('click', async () => {
+    statusBtn.disabled = true;
+    statusBtn.textContent = 'देख रहे हैं…';
+    const out = byId('inlineAppStatusResult');
+    try {
+      const res = await api('/api/auth/application-status', {
+        method: 'POST',
+        body: { applicationId: byId('inlineAppId').value.trim(), receipt: byId('inlineAppReceipt').value.trim(), deviceId: DEVICE_ID },
+      });
+      const label = res.status === 'approved' ? '✅ मंज़ूर' : res.status === 'rejected' ? '❌ अस्वीकृत' : res.status === 'expired' ? '⌛ समाप्त' : '⏳ Pending (जाँच में)';
+      out.innerHTML = '<b>' + esc(res.applicationId) + ' — ' + label + '</b><br>' + esc(res.message || '')
+        + (res.decisionNote ? '<br><span class="muted small">Team Janmat: ' + esc(res.decisionNote) + '</span>' : '');
+      if (res.status === 'approved') {
+        setMode('login');
+        loginUsername.value = res.username || '';
+        setTimeout(() => loginPin.focus(), 200);
+      }
+    } catch (e) {
+      out.textContent = e.message;
+    }
+    statusBtn.disabled = false;
+    statusBtn.textContent = 'स्थिति देखें';
+  });
+
+  if (loginUsername) loginUsername.focus();
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = mode === 'register' ? 'खाता बना रहे हैं…' : mode === 'old' ? 'पुराना खाता जोड़ रहे हैं…' : 'लॉगिन…';
+    try {
+      let res;
+      if (mode === 'register') {
+        const name = regName.value.trim();
+        if (name.length < 2) throw new Error('अपना असली नाम लिखें।');
+        const username = await ensureAvailable(regUsername, regUsernameStatus);
+        const pin = checkPinPair(regPin, regPin2, username);
+        res = await registerWithCredentials(name, username, pin);
+        toast((res.claimed ? 'आपके पुराने खाते पर username लग गया — ' : 'खाता बन गया — ') + 'स्वागत है, ' + res.user.name + ' (@' + res.user.username + ')! कार्ड सँभाल लें।', 'ok');
+        if (res.sameNameExists) {
+          setTimeout(() => toast('इसी नाम के अन्य लोग भी हो सकते हैं — आपका username सिर्फ़ आपका है।', 'ok'), 1400);
+        }
+      } else if (mode === 'old') {
+        const name = oldName.value.trim();
+        if (name.length < 2) throw new Error('पुराना नाम ठीक वैसा ही लिखें जैसा पहले चलता था।');
+        const username = await ensureAvailable(oldUsername, oldUsernameStatus);
+        const pin = checkPinPair(oldPin, oldPin2, username);
+        res = await migrateOldAccount({ name, oldPassword: oldPassword.value, username, password: pin });
+        toast('पुराना खाता मिल गया! अब आपका username @' + res.user.username + ' है — नया कार्ड सँभाल लें।', 'ok');
+      } else {
+        const username = normalizeUsernameClient(loginUsername.value);
+        loginUsername.value = username;
+        const uErr = usernameErrorClient(username);
+        if (uErr) throw new Error(uErr);
+        if (!loginPin.value) throw new Error('अपना PIN लिखें।');
+        res = await loginWithCredentials(username, loginPin.value);
+        toast('स्वागत है, ' + res.user.name + (res.user.username ? ' (@' + res.user.username + ')' : '') + '!', 'ok');
+      }
+      if (onDone) onDone();
+    } catch (e) {
+      toast(e.message, 'err');
+      if (e.code === 'USERNAME_TAKEN') {
+        if (mode === 'register') checkUsernameNow(regUsername, regUsernameStatus);
+        else if (mode === 'old') checkUsernameNow(oldUsername, oldUsernameStatus);
+      } else if (e.code === 'ACCOUNT_NOT_FOUND') {
+        setMode('register');
+        if (loginUsername.value) { regUsername.value = loginUsername.value; checkUsernameNow(regUsername, regUsernameStatus); }
+      } else if (e.code === 'DEVICE_HAS_ACCOUNT') {
+        openAppeal();
+        const kind = byId('inlineAppealKind');
+        if (kind) kind.value = 'device-second-account';
+        if (regName.value) byId('inlineAppealName').value = regName.value;
+        if (regUsername.value) byId('inlineAppealUsername').value = regUsername.value;
+      } else if (e.code === 'ACCOUNT_PENDING') {
+        openAppeal();
+      }
+    }
+    btn.disabled = false;
+    btn.textContent = mode === 'register'
+      ? 'मेरा नया खाता बनाएँ'
+      : mode === 'old'
+        ? 'पुराने खाते में Username लगाएँ'
+        : 'लॉगिन करें';
+    if (!btn.textContent) btn.textContent = originalText;
   });
 }
 
@@ -962,14 +1464,14 @@ const HOW_SECTION = `
       <div>
         <div class="kicker">बस 3 कदम</div>
         <h2>कैसे काम करता है?</h2>
-        <p>नाम से लॉगिन कीजिए, चुनाव बनाइए या किसी के चुनाव में वोट दीजिए — बाकी सब अपने आप।</p>
+        <p>Username से लॉगिन कीजिए, चुनाव बनाइए या किसी के चुनाव में वोट दीजिए — बाकी सब अपने आप।</p>
       </div>
     </div>
     <div class="how-grid">
       <div class="how-card">
         <div class="how-num">1</div>
-        <h3>नाम से लॉगिन</h3>
-        <p>सिर्फ़ अपना नाम लिखिए — कोई पासवर्ड/OTP नहीं। यही नाम आपकी पहचान बनता है (किसे सिर्फ़ डेवलपर देख सकता है)।</p>
+        <h3>Username से लॉगिन</h3>
+        <p>नाम + अपना गुप्त पासवर्ड रखिए — मोबाइल/OTP/Gmail नहीं लगता। अब वही नाम लिखकर कोई और आपके खाते में नहीं जा सकता।</p>
       </div>
       <div class="how-card">
         <div class="how-num">2</div>
@@ -993,7 +1495,7 @@ const HERO = `
       <h1>अपने गाँव का <span class="hl">चुनाव</span>,<br/>अब ऑनलाइन।</h1>
       <p class="hero-sub">
         सरपंच, प्रधान, मुखिया, अध्यक्ष या विधायक — अपना चुनाव बनाइए, गाँव, ज़िला और राज्य चुनिए,
-        और एक लिंक से दुनिया के किसी भी कोने से मतदान करवाइए। नाम से लॉगिन, एक डिवाइस से एक वोट, हर नतीजा लाइव।
+        और एक लिंक से दुनिया के किसी भी कोने से मतदान करवाइए। Username से लॉगिन, एक डिवाइस से एक वोट, हर नतीजा लाइव।
       </p>
       <div class="hero-actions">
         <a class="btn btn-saffron btn-lg" href="#/create">
@@ -1003,7 +1505,7 @@ const HERO = `
         <a class="btn btn-ghost btn-lg" href="#/explore">चुनाव खोजें</a>
       </div>
       <div class="hero-trust">
-        <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> नाम से लॉगिन</span>
+        <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> Username + PIN लॉगिन</span>
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> लाइव परिणाम</span>
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> एक डिवाइस, एक वोट</span>
       </div>
@@ -1035,7 +1537,7 @@ function heroStepsHTML() {
       <div class="ballot-title">जनमत कैसे काम करता है</div>
       <span class="ballot-live off"><i></i> नया</span>
     </div>
-    ${step(1, 'अपना नाम लिखकर लॉगिन कीजिए', 'पासवर्ड या OTP की ज़रूरत नहीं — बस नाम')}
+    ${step(1, 'Username + PIN से खाता बनाइए', 'मोबाइल/Gmail/OTP नहीं — username आपकी स्थायी ID और PIN उसकी चाबी है')}
     ${step(2, 'उम्मीदवार जोड़िए', 'चुनाव चिन्ह के साथ — 2 मिनट में तैयार')}
     ${step(3, 'लिंक भेजिए या खोजिए', 'जो भी जहाँ भी हो, वोट कर सकेगा')}
     <div class="ballot-foot"><span>एक डिवाइस = एक वोट</span><span>नतीजे लाइव</span></div>
@@ -1237,7 +1739,7 @@ async function renderHome() {
     <div class="wrap">
       <div class="panel cta-panel">
         <h2>आपके गाँव का फैसला, अब आपके हाथ में।</h2>
-        <p>चुनाव बनाना बिलकुल मुफ़्त है — नाम से लॉगिन कीजिए और दो मिनट में चुनाव तैयार।</p>
+        <p>चुनाव बनाना बिलकुल मुफ़्त है — username से लॉगिन कीजिए और दो मिनट में चुनाव तैयार।</p>
         <a class="btn btn-saffron btn-lg" href="#/create">अभी चुनाव बनाएँ →</a>
         <p class="cta-legal">यह मंच सिर्फ़ सामुदायिक/निजी मतदान के लिए है। किसी सरकारी या निर्वाचन-आयोग चुनाव से इसका कोई संबंध नहीं है। <a href="#/disclaimer">पूरा डिस्क्लेमर</a></p>
       </div>
@@ -1918,7 +2420,7 @@ function voteAreaHTML(d) {
       </div></div>
       <div><h4>आपका वोट दर्ज हो चुका है</h4>
       <p>${my ? `आपने <b>${esc(my.name)}</b> को वोट दिया।` : 'इस चुनाव में आपका वोट दर्ज है।'} धन्यवाद!</p>
-      ${state.user ? '' : '<p class="muted small">चाहें तो <a href="#/login">नाम से लॉगिन</a> कर लें — इससे आपका रिकॉर्ड सुरक्षित रहेगा।</p>'}</div></div>`;
+      ${state.user ? '' : '<p class="muted small">चाहें तो <a href="#/login">username से लॉगिन</a> कर लें — इससे आपका रिकॉर्ड सुरक्षित रहेगा।</p>'}</div></div>`;
   }
   return `
     ${guestNote}
@@ -2310,16 +2812,20 @@ function renderLogin() {
       <div class="panel login-done">
         <div class="avatar big">${esc((state.user.name || '?').charAt(0).toUpperCase())}</div>
         <h2>आप पहले से लॉगिन हैं</h2>
-        <p class="muted">${esc(state.user.name)} के रूप में।</p>
+        <p class="muted">${esc(state.user.name)}${state.user.username ? ' <b>(@' + esc(state.user.username) + ')</b>' : ''} के रूप में।</p>
+        ${state.user.username ? '' : '<p class="login-note" style="max-width:520px;margin:12px auto 0">⚠ अब लॉगिन username + PIN से होता है। कृपया अभी अपना स्थायी username चुन लें, वरना अगली बार लॉगिन में दिक्कत होगी।</p>'}
         <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px">
-          <a class="btn btn-primary" href="${next ? '#/' + next : '#/settings'}">आगे बढ़ें</a>
-          <button class="btn btn-ghost" id="switchUser">दूसरे नाम से लॉगिन</button>
+          ${state.user.username ? '' : '<button class="btn btn-primary" id="chooseUsernameBtnLogin" type="button">अपना Username चुनें</button>'}
+          <a class="btn ${state.user.username ? 'btn-primary' : 'btn-ghost'}" href="${next ? '#/' + next : '#/settings'}">आगे बढ़ें</a>
+          <button class="btn btn-ghost" id="switchUser">दूसरे खाते से लॉगिन</button>
         </div>
       </div>
     </div></section>`;
     document.getElementById('switchUser').addEventListener('click', async () => {
       await logoutUser();
     });
+    const chooseBtn = document.getElementById('chooseUsernameBtnLogin');
+    if (chooseBtn) chooseBtn.addEventListener('click', () => { usernamePromptShown = true; showUsernameSetupModal(); });
     return;
   }
 
@@ -2328,68 +2834,37 @@ function renderLogin() {
     <div class="wrap wrap-narrow">
       <div class="login-hero">
         <div class="kicker" style="color:#ffd08a">लॉगिन</div>
-        <h1>अपना नाम लिखिए, बस।</h1>
-        <p>कोई पासवर्ड नहीं, कोई OTP नहीं, कोई ईमेल नहीं — सिर्फ़ नाम।</p>
+        <h1>Username + PIN, बस।</h1>
+        <p>कोई मोबाइल नंबर नहीं, कोई Gmail नहीं, कोई OTP नहीं। आपका नाम प्रोफ़ाइल है; आपकी स्थायी username-ID और गुप्त PIN ही खाते की चाबी है।</p>
       </div>
 
-      <div class="panel login-card big">
-        <div class="login-card-ico">${ICON.user}</div>
-        <h3>नाम से लॉगिन</h3>
-        <p class="muted">यही नाम आपकी पहचान है — इससे आप चुनाव बना सकते हैं। <b>वोट देने के लिए लॉगिन ज़रूरी नहीं</b> — शेयर किया लिंक खोलकर सीधे वोट कीजिए।</p>
-        ${savedNameHint ? `<div class="guest-note" style="margin-bottom:14px">
-          <b>इस फ़ोन से पहले लॉगिन हुआ था।</b>
-          <span>अगर यही फ़ोन आपका है तो नीचे दबाइए — सीधे उसी खाते में लॉगिन हो जाएगा।</span>
-          <button type="button" class="btn btn-ghost btn-sm" id="useSavedName" style="margin-top:8px;align-self:flex-start">
-            "${esc(savedNameHint)}" से लॉगिन करें
-          </button>
-          <span class="muted small" style="margin-top:6px">यह फ़ोन किसी और का है? तो अपना नाम नीचे लिखिए — एक फ़ोन = एक नाम.</span>
-        </div>` : ''}
-        <form id="loginForm" autocomplete="off">
-          <input id="loginName" type="text" placeholder="आपका नाम (जैसे: रवि शर्मा)" maxlength="30" aria-label="आपका नाम" />
-          <button class="btn btn-primary btn-lg" type="submit" id="loginBtn">लॉगिन करें</button>
-        </form>
+      ${savedAccountHint ? `<div class="guest-note" style="margin-bottom:14px">
+        <b>इस फ़ोन से पहले "${esc(savedAccountHint.name || savedNameHint || '')}" का खाता चला था।</b>
+        <span>${savedAccountHint.usernameMasked ? 'उसका username कुछ ऐसा था: <b>' + esc(savedAccountHint.usernameMasked) + '</b>। ' : ''}पूरा username लॉगिन कार्ड पर होता है। अपने आप लॉगिन नहीं होगा — username + PIN आपको खुद लिखना होगा।</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="showSavedUsernameHint" style="margin-top:8px;align-self:flex-start">
+          Username भूल गए? संकेत / आवेदन देखें
+        </button>
+      </div>` : ''}
+
+      ${loginCardHTML({
+        title: 'Username + PIN से लॉगिन',
+        sub: 'चुनाव बनाने और खाता सँभालने के लिए लॉगिन करें। वोट देने के लिए लॉगिन ज़रूरी नहीं — शेयर किया लिंक खोलकर सीधे वोट कीजिए। पहली बार आए हैं तो "नया खाता", और पहले सिर्फ़ नाम से खाता था तो "पुराना खाता" चुनें।',
+      })}
+
+      <div class="panel" style="margin-top:16px">
         <div class="login-rules">
-          <div>${ICON.shield}<span><b>नाम से लॉगिन:</b> जो नाम आपने डाला, आगे भी वही डालें — तभी आपका खाता वही रहेगा।</span></div>
-          <div>${ICON.ballot}<span><b>एक डिवाइस, एक वोट:</b> हर चुनाव में आपका एक ही वोट गिना जाएगा।</span></div>
-          <div>${ICON.clock}<span><b>रोज़ 2 चुनाव:</b> हर उपयोगकर्ता 1 दिन में अधिकतम 2 चुनाव बना सकता है।</span></div>
-          <div>${ICON.lock || ICON.shield}<span><b>एक मोबाइल = एक नाम:</b> जिस मोबाइल से पहली बार जिस नाम से लॉगिन हुआ, उसी मोबाइल से आगे वही नाम चलेगा।</span></div>
-          <div>${ICON.star || ICON.ballot}<span><b>लॉगिन कार्ड:</b> लॉगिन करते ही आपके नाम वाली एक इमेज डाउनलोड होगी — उसे सँभाल कर रखें।</span></div>
+          <div>${ICON.shield}<span><b>Username सिर्फ़ एक का:</b> जैसे @pawan_verma एक बार किसी ने ले लिया, तो वही username दूसरा कोई नहीं ले सकता — फॉर्म उसी समय "पहले से उपयोग में है" बता देगा।</span></div>
+          <div>${ICON.user}<span><b>नाम सबके अलग-अलग नहीं चाहिए:</b> दस "रमेश" हो सकते हैं; पहचान उनके अलग username से होगी, नाम सिर्फ़ प्रोफ़ाइल में दिखेगा।</span></div>
+          <div>${ICON.ballot}<span><b>मेहमान वोट भी चलेगा:</b> लिंक खोलकर बिना खाते वोट दिया जा सकता है। बाद में उसी फ़ोन से signup होने पर वोट उसी username से जुड़ जाएगा, गिनती एक ही रहेगी।</span></div>
+          <div>${ICON.clock}<span><b>एक फ़ोन = एक सीधा signup:</b> साझा फ़ोन पर दूसरा खाता Team Janmat की मंज़ूरी (appeal) से बनेगा। हर खाता रोज़ अधिकतम 2 चुनाव बना सकता है।</span></div>
+          <div>${ICON.star || ICON.ballot}<span><b>PIN भूल गए?</b> लॉगिन कार्ड के रिकवरी कोड से नया PIN बनेगा। <b>Username भूल गए?</b> आवेदन भेजें — Team Janmat जाँचकर मंज़ूरी देगी, तब तक Pending रहेगा।</span></div>
         </div>
         <p class="login-note">आगे बढ़ने पर आप <a href="#/disclaimer">डिस्क्लेमर व नियम</a> स्वीकार करते हैं।</p>
       </div>
     </div>
   </section>`;
 
-  const form = document.getElementById('loginForm');
-  const input = document.getElementById('loginName');
-  const btn = document.getElementById('loginBtn');
-  /* पहले से पहचाना गया नाम — एक टैप में भर जाए */
-  const savedBtn = document.getElementById('useSavedName');
-  if (savedBtn) savedBtn.addEventListener('click', () => {
-    input.value = savedNameHint || '';
-    input.focus();
-    savedBtn.textContent = 'नाम भर दिया — अब "लॉगिन करें" दबाइए';
-  });
-  input.focus();
-  form.addEventListener('submit', async (ev) => {
-    ev.preventDefault();
-    const name = input.value.trim();
-    if (name.length < 2) return toast('कम से कम 2 अक्षरों का नाम लिखें', 'err');
-    btn.disabled = true;
-    btn.textContent = 'लॉगिन…';
-    try {
-      const res = await loginWithName(name);
-      toast('स्वागत है, ' + res.user.name + '!', 'ok');
-      location.hash = next ? '#/' + next : '#/settings';
-    } catch (e) {
-      toast(e.message, 'err');
-      btn.disabled = false;
-      btn.textContent = 'लॉगिन करें';
-      if (e.code === 'DEVICE_TAKEN') {
-        askRebind((e.data && e.data.ownerName) || '', name, () => { location.hash = next ? '#/' + next : '#/settings'; });
-      }
-    }
-  });
+  bindLoginCard(() => { location.hash = next ? '#/' + next : '#/settings'; });
 }
 
 /* =====================================================================
@@ -2397,7 +2872,7 @@ function renderLogin() {
    ===================================================================== */
 
 const SETTINGS_ROWS = [
-  { id: 'profile',    icon: 'user',    title: 'मेरी प्रोफ़ाइल',        sub: 'नाम, जुड़ने की तारीख़ और आँकड़े', href: '#/settings/profile' },
+  { id: 'profile',    icon: 'user',    title: 'मेरी प्रोफ़ाइल',        sub: 'नाम, username, तारीख़ और आँकड़े', href: '#/settings/profile' },
   { id: 'elections',  icon: 'ballot',  title: 'मेरे चुनाव',            sub: 'आपके बनाए चुनाव — चालू / समाप्त, बंद करें', href: '#/settings/elections' },
   { id: 'votes',      icon: 'star',    title: 'मेरे वोट',              sub: 'आपने किन चुनावों में किसको वोट दिया', href: '#/settings/votes' },
   { id: 'appearance', icon: 'gear',    title: 'दिखावट और डार्क मोड',   sub: 'लाइट, डार्क या सिस्टम थीम', href: '#/settings/appearance' },
@@ -2406,7 +2881,7 @@ const SETTINGS_ROWS = [
   { id: 'terms',      icon: 'doc',     title: 'नियम व शर्तें',         sub: 'उपयोग की शर्तें और ज़िम्मेदारियाँ', href: '#/terms' },
   { id: 'disclaimer', icon: 'warn',    title: 'डिस्क्लेमर',            sub: 'यह सरकारी/निर्वाचन-आयोग मंच नहीं है', href: '#/disclaimer' },
   { id: 'developer',  icon: 'key',     title: 'डेवलपर एक्सेस',         sub: 'सिर्फ़ आपके लिए — पासवर्ड से खुलेगा', href: '#/developer' },
-  { id: 'account',    icon: 'lock',    title: 'खाता और सुरक्षा',       sub: 'लॉगआउट, खाता हटाना और डेटा', href: '#/settings/account' },
+  { id: 'account',    icon: 'lock',    title: 'खाता और सुरक्षा',       sub: 'PIN बदलना, लॉगआउट, खाता हटाना', href: '#/settings/account' },
 ];
 
 function rowIcon(name, size) {
@@ -2478,7 +2953,7 @@ async function renderSettings(tab) {
         <div>
           <div class="kicker">${tab === 'main' ? 'सेटिंग्स' : 'मेरा खाता'}</div>
           <h2>${esc(state.user.name)}</h2>
-          <p class="muted">${data ? esc(data.elections.length) + ' चुनाव · ' + esc(data.votes.length) + ' वोट' : 'सेटिंग्स'} · ${getThemePref() === 'dark' ? 'डार्क मोड' : getThemePref() === 'light' ? 'लाइट मोड' : 'सिस्टम थीम'}</p>
+          <p class="muted">${state.user.username ? '<b>@' + esc(state.user.username) + '</b> · ' : '<b style="color:#b45309">Username अभी नहीं चुना</b> · '}${data ? esc(data.elections.length) + ' चुनाव · ' + esc(data.votes.length) + ' वोट' : 'सेटिंग्स'} · ${getThemePref() === 'dark' ? 'डार्क मोड' : getThemePref() === 'light' ? 'लाइट मोड' : 'सिस्टम थीम'}</p>
         </div>
         <div class="settings-head-actions">
           <a class="btn btn-primary btn-sm" href="#/create">＋ नया चुनाव</a>
@@ -2496,7 +2971,38 @@ async function renderSettings(tab) {
   const logoutBtn2 = document.getElementById('logoutBtn2');
   if (logoutBtn2) logoutBtn2.addEventListener('click', logoutUser);
   const redl = document.getElementById('redownloadCard');
-  if (redl) redl.addEventListener('click', () => openLoginCard(state.user && state.user.name, { first: false }));
+  if (redl) redl.addEventListener('click', () => openLoginCard(state.user && state.user.name, { first: false, username: state.user && state.user.username }));
+  const chooseUsernameBtn = document.getElementById('chooseUsernameBtn');
+  if (chooseUsernameBtn) chooseUsernameBtn.addEventListener('click', () => { usernamePromptShown = true; showUsernameSetupModal(); });
+
+  const newPwEl = document.getElementById('newPw');
+  const newPw2El = document.getElementById('newPw2');
+  [newPwEl, newPw2El].forEach((el) => {
+    if (el) el.addEventListener('input', () => { el.value = String(el.value).replace(/[^0-9]/g, '').slice(0, 10); });
+  });
+  const changePwBtn = document.getElementById('changePwBtn');
+  if (changePwBtn) changePwBtn.addEventListener('click', async () => {
+    const oldPassword = document.getElementById('oldPw').value;
+    const newPassword = document.getElementById('newPw').value;
+    const newPassword2 = document.getElementById('newPw2').value;
+    const pinErr = pinErrorClient(newPassword, state.user && state.user.username);
+    if (!oldPassword) return toast('मौजूदा PIN/पासवर्ड लिखें', 'err');
+    if (pinErr) return toast(pinErr, 'err');
+    if (newPassword !== newPassword2) return toast('दोनों नए PIN एक जैसे नहीं हैं।', 'err');
+    changePwBtn.disabled = true;
+    changePwBtn.textContent = 'बदल रहे हैं…';
+    try {
+      await api('/api/auth/password', { method: 'POST', body: { oldPassword, newPassword } });
+      document.getElementById('oldPw').value = '';
+      document.getElementById('newPw').value = '';
+      document.getElementById('newPw2').value = '';
+      toast('PIN बदल गया। अगली बार नया PIN लगेगा।', 'ok');
+    } catch (e) {
+      toast(e.message, 'err');
+    }
+    changePwBtn.disabled = false;
+    changePwBtn.textContent = 'PIN बदलें';
+  });
 
   bindCopyButtons();
 
@@ -2625,10 +3131,21 @@ function settingsAccountHTML() {
   <div class="panel">
     <div class="section-title"><h2 style="font-size:18px">खाता</h2></div>
     <ul class="info-list">
-      <li><b>लॉगिन का तरीक़ा</b><span>सिर्फ़ नाम (कोई पासवर्ड नहीं)</span></li>
-      <li><b>नाम</b><span>${esc(state.user.name)}</span></li>
+      <li><b>प्रोफ़ाइल नाम</b><span>${esc(state.user.name)}</span></li>
+      <li><b>Username (Login-ID)</b><span>${state.user.username ? '<b>@' + esc(state.user.username) + '</b> · स्थायी, बदला नहीं जा सकता' : '<b style="color:#b45309">अभी नहीं चुना</b>'}</span></li>
+      <li><b>लॉगिन का तरीक़ा</b><span>Username + गुप्त PIN (मोबाइल/Gmail/OTP नहीं)</span></li>
       <li><b>सदस्यता</b><span>${esc(fullDate(state.user.createdAt))}</span></li>
     </ul>
+    ${state.user.username ? '' : '<div class="guest-note" style="margin-top:14px"><b>आपका Username अभी बाकी है।</b><span>अब लॉगिन username + PIN से होता है — कृपया अभी चुन लें। आपका नाम, चुनाव और वोट वैसे ही रहेंगे।</span><button class="btn btn-primary btn-sm" id="chooseUsernameBtn" type="button" style="margin-top:8px;align-self:flex-start">Username चुनें</button></div>'}
+    <div class="pw-change">
+      <h3 style="font-size:15px;margin:18px 0 6px">🔐 PIN बदलें</h3>
+      <p class="muted small" style="margin-bottom:10px">मौजूदा PIN/पासवर्ड डालकर नया 6–10 अंकों का PIN रखें। बाकी सब जगह से आप लॉगआउट हो जाएँगे। रिकवरी कोड वही पुराना चलेगा।</p>
+      <input id="oldPw" type="password" placeholder="मौजूदा PIN / पुराना पासवर्ड" maxlength="64" autocomplete="current-password" aria-label="मौजूदा PIN या पासवर्ड" />
+      <input id="newPw" type="password" inputmode="numeric" placeholder="नया PIN (6–10 अंक)" maxlength="10" autocomplete="new-password" aria-label="नया PIN" />
+      <input id="newPw2" type="password" inputmode="numeric" placeholder="नया PIN दोबारा" maxlength="10" autocomplete="new-password" aria-label="नया PIN दोबारा" />
+      <button class="btn btn-dark" id="changePwBtn" type="button">PIN बदलें</button>
+    </div>
+    <p class="muted small" style="margin-top:14px">नोट: दोबारा डाउनलोड किए कार्ड पर रिकवरी कोड नहीं छपता — कोड सिर्फ़ पहले कार्ड पर मिला था, उसे ही सँभालकर रखें।</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
       <button class="btn btn-primary" id="redownloadCard">🎴 मेरा लॉगिन कार्ड फिर डाउनलोड करें</button>
       <button class="btn btn-ghost" id="logoutBtn2">लॉगआउट करें</button>
@@ -2654,6 +3171,15 @@ function settingsProfileHTML(data) {
   const q = data.quota || { limit: 2, used: 0, remaining: 2, resetsAt: 0 };
   const pct = Math.min(100, Math.round((q.used / q.limit) * 100));
   return `
+  <div class="panel" style="margin-bottom:16px">
+    <div class="section-title"><h2 style="font-size:17px">मेरी पहचान</h2></div>
+    <ul class="info-list">
+      <li><b>प्रोफ़ाइल नाम</b><span>${esc(state.user.name)}</span></li>
+      <li><b>Username</b><span>${state.user.username ? '<b>@' + esc(state.user.username) + '</b>' : '<b style="color:#b45309">अभी नहीं चुना</b>'}</span></li>
+      <li><b>जुड़े</b><span>${esc(fullDate(state.user.createdAt))}</span></li>
+    </ul>
+    ${state.user.username ? '<p class="muted small" style="margin-top:10px">यही username आपकी स्थायी login-ID है — पूरी Janmat में यह सिर्फ़ आपका है।</p>' : '<button class="btn btn-primary btn-sm" id="chooseUsernameBtn" type="button" style="margin-top:12px">अपना Username चुनें</button>'}
+  </div>
   <div class="settings-grid">
     <div class="panel">
       <div class="section-title"><h2 style="font-size:17px">आज की गतिविधि</h2></div>
@@ -2676,7 +3202,7 @@ function settingsProfileHTML(data) {
     <div class="panel">
       <div class="section-title"><h2 style="font-size:17px">नियम एक नज़र में</h2></div>
       <ul class="info-list">
-        <li><b>लॉगिन</b><span>नाम से (कोई पासवर्ड नहीं)</span></li>
+        <li><b>लॉगिन</b><span>Username + 6–10 अंकों के PIN से</span></li>
         <li><b>वोट नियम</b><span>एक डिवाइस = एक वोट प्रति चुनाव</span></li>
         <li><b>चुनाव सीमा</b><span>1 दिन में अधिकतम ${q.limit} चुनाव</span></li>
         <li><b>गोपनीयता</b><span>किसने किसको वोट दिया — सिर्फ़ डेवलपर देख सकता है</span></li>
@@ -2797,6 +3323,7 @@ async function renderDeveloper() {
         <button class="tab ${devTab === 'votes' ? 'active' : ''}" data-devt="votes">सभी वोट (${devData.votes.length})</button>
         <button class="tab ${devTab === 'users' ? 'active' : ''}" data-devt="users">यूज़र्स (${devData.users.length})</button>
         <button class="tab ${devTab === 'complaints' ? 'active' : ''}" data-devt="complaints">शिकायतें (${(devData.usage && devData.usage.openComplaints) || 0})</button>
+        <button class="tab ${devTab === 'applications' ? 'active' : ''}" data-devt="applications">खाता आवेदन (${(devData.usage && devData.usage.pendingApplications) || 0})</button>
         <button class="tab ${devTab === 'summary' ? 'active' : ''}" data-devt="summary">सारांश</button>
       </div>
 
@@ -2858,6 +3385,7 @@ async function renderDeveloper() {
       devTab = btn.dataset.devt;
       $$('[data-devt]').forEach((b) => b.classList.toggle('active', b === btn));
       if (devTab === 'complaints') await loadDevComplaints();
+      if (devTab === 'applications') await loadDevApplications();
       document.getElementById('devBody').innerHTML = devBodyHTML();
       bindDevBody();
     });
@@ -2911,7 +3439,7 @@ function usageMeterHTML() {
           <b>${bytesHuman(u.dbBytes)}</b> / ${bytesHuman(u.dbBytesQuota)} डेटा (${dbPct.toFixed(2)}%)
         </div>
         ${meterBar(dbPct)}
-        <div class="muted small" style="margin-top:8px">खुली शिकायतें: <b>${fmt(u.openComplaints || 0)}</b></div>
+        <div class="muted small" style="margin-top:8px">खुली शिकायतें: <b>${fmt(u.openComplaints || 0)}</b> · लंबित खाता आवेदन: <b>${fmt(u.pendingApplications || 0)}</b> · बिना username खाते: <b>${fmt(u.accountsWithoutUsername || 0)}</b></div>
       </div>
     </div>
     <p class="muted small" style="margin-top:12px">
@@ -2993,6 +3521,93 @@ function devComplaintsHTML() {
   </div>`;
 }
 
+/* =====================================================================
+   🙋 खाता आवेदन (username भूल गए / साझा फ़ोन) — डेवलपर की मंज़ूरी
+   ===================================================================== */
+let devApplications = null;
+
+async function loadDevApplications() {
+  try {
+    devApplications = await api('/api/dev/applications');
+  } catch (e) {
+    devApplications = { applications: [], stats: { total: 0, pending: 0, approved: 0, rejected: 0 }, error: e.message };
+  }
+  return devApplications;
+}
+
+function devApplicationKindLabel(k) {
+  return k === 'device-second-account' ? 'साझा फ़ोन पर दूसरा खाता' : 'Username भूल गए';
+}
+function devApplicationStatusLabel(s) {
+  return s === 'approved' ? '<b style="color:#2fa84f">मंज़ूर</b>'
+    : s === 'rejected' ? '<b style="color:#e5484d">अस्वीकृत</b>'
+    : s === 'expired' ? '<b style="color:#9a93ad">समय समाप्त</b>'
+    : '<b style="color:#f0a020">Pending — निर्णय चाहिए</b>';
+}
+
+function devApplicationsHTML() {
+  if (!devApplications) return '<div class="dev-card"><p class="muted">खाता आवेदन लोड हो रहे हैं…</p></div>';
+  if (devApplications.error) return `<div class="dev-card"><p class="muted">लोड नहीं हो पाया: ${esc(devApplications.error)}</p></div>`;
+  const st = devApplications.stats || {};
+  const list = devApplications.applications || [];
+  return `
+  <div class="dev-stats" style="margin-bottom:16px">
+    <div class="dev-stat"><b>${fmt(st.pending || 0)}</b><span>Pending आवेदन</span></div>
+    <div class="dev-stat"><b>${fmt(st.approved || 0)}</b><span>मंज़ूर</span></div>
+    <div class="dev-stat"><b>${fmt(st.rejected || 0)}</b><span>अस्वीकृत</span></div>
+    <div class="dev-stat"><b>${fmt(st.total || 0)}</b><span>कुल दिख रहे</span></div>
+  </div>
+  <div class="dev-card">
+    <div class="dev-card-head">
+      <h3>खाता आवेदन — Team Janmat की मंज़ूरी</h3>
+      <span class="storage-chip">PIN/कोड यहाँ नहीं दिखता</span>
+    </div>
+    <p class="dev-note" style="margin-bottom:12px">
+      <b>पुराना खाता बदलें</b> = आवेदक सच में वही व्यक्ति है; पुराने खाते के चुनाव/वोट नए username में आ जाएँगे और पुराना login बंद होगा।
+      <b>अलग खाता बनाएँ</b> = साझा फ़ोन का दूसरा असली सदस्य। संदेह हो तो अस्वीकार करें और कारण लिखें।
+    </p>
+    ${list.length ? list.map((a) => `
+      <div class="dev-application" style="border-bottom:1px solid rgba(255,255,255,.09);padding:14px 0">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <b>${esc(a.name)}</b>
+          <span class="code-chip">@${esc(a.desiredUsername)}</span>
+          <span class="mini-badge">${esc(devApplicationKindLabel(a.kind))}</span>
+          <span>${devApplicationStatusLabel(a.status)}</span>
+        </div>
+        <div class="muted small" style="margin-top:5px">
+          आवेदन <b>${esc(a.id)}</b> · ${esc(fullDate(a.createdAt))} (${esc(timeAgo(a.createdAt))})
+          ${a.decidedAt ? ' · निर्णय: ' + esc(fullDate(a.decidedAt)) : ''}
+        </div>
+        <div style="margin-top:7px;white-space:pre-wrap"><b>कारण:</b> ${esc(a.reason)}</div>
+        ${a.decisionNote ? '<div class="muted small" style="margin-top:5px">टिप्पणी: ' + esc(a.decisionNote) + '</div>' : ''}
+
+        ${a.conflicts && a.conflicts.length ? `
+          <div style="margin-top:9px">
+            <b>इसी फ़ोन/पहचान से जुड़े पुराने खाते:</b>
+            ${a.conflicts.map((u, i) => `
+              <label style="display:block;margin-top:7px;cursor:${a.status === 'pending' ? 'pointer' : 'default'}">
+                ${a.status === 'pending' ? '<input type="radio" name="appmode-' + esc(a.id) + '" value="replace:' + esc(u.id) + '"' + (i === 0 ? ' checked' : '') + '> <b>पुराने खाते को बदलें:</b> ' : '• '}
+                ${esc(u.name)} ${u.username ? '(@' + esc(u.username) + ')' : '(username नहीं)'}
+                <span class="muted small">· ${u.electionsCreated} चुनाव बनाए · ${u.votesCast} वोट · आख़िरी लॉगिन ${esc(timeAgo(u.lastLoginAt))} · ${u.hasPassword ? 'पासवर्ड/PIN लगा' : 'बिना-पासवर्ड पुराना'}</span>
+              </label>`).join('')}
+            ${a.status === 'pending' ? '<label style="display:block;margin-top:7px;cursor:pointer"><input type="radio" name="appmode-' + esc(a.id) + '" value="additional"> <b>अलग दूसरा खाता बनाएँ</b> <span class="muted small">(साझा फ़ोन का दूसरा सदस्य; पुराना खाता वैसा ही रहेगा)</span></label>' : ''}
+          </div>` : '<div class="muted small" style="margin-top:8px">इस फ़ोन से जुड़ा कोई पुराना खाता सर्वर को नहीं मिला — कारण देखकर ही निर्णय लें।</div>'}
+
+        ${a.status === 'pending' ? `
+          <input id="app-note-${esc(a.id)}" type="text" maxlength="300" placeholder="उपयोगकर्ता को दिखने वाली छोटी टिप्पणी (वैकल्पिक)" style="margin-top:10px" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px">
+            <button class="btn btn-primary btn-sm" data-app-approve="${esc(a.id)}">मंज़ूर करें</button>
+            <button class="btn btn-danger btn-sm" data-app-reject="${esc(a.id)}">अस्वीकार करें</button>
+          </div>` : `
+          <div class="muted small" style="margin-top:8px">
+            ${a.status === 'approved' ? 'उपयोगकर्ता अब अपने चुने username + PIN से लॉगिन कर सकता है।' : ''}
+            ${a.replacedUserId ? ' पुराना खाता नए username से बदल दिया गया।' : ''}
+          </div>`}
+      </div>`).join('') : '<p class="muted">अभी कोई खाता आवेदन नहीं है।</p>'}
+    <p class="muted small" style="margin-top:12px">आवेदन 7 दिन तक Pending रह सकता है। चुना username तब तक किसी और को नहीं मिलेगा।</p>
+  </div>`;
+}
+
 function devStatsHTML() {
   if (!devData) return '';
   const s = devData.stats;
@@ -3014,18 +3629,22 @@ async function refreshDevData() {
   if (!state.devToken) return;
   try {
     devData = await api('/api/dev/overview');
+    if (devTab === 'applications') await loadDevApplications();
   } catch (_) { return; }
   const st = document.getElementById('devStats');
   if (st) st.innerHTML = devStatsHTML();
   const body = document.getElementById('devBody');
   if (body) { body.innerHTML = devBodyHTML(); bindDevBody(); }
-  const tabs = document.querySelectorAll('[data-devt]');
-  if (tabs.length) {
-    tabs[0].textContent = 'सारांश';
-    tabs[1].textContent = 'यूज़र्स (' + devData.users.length + ')';
-    tabs[2].textContent = 'चुनाव (' + devData.elections.length + ')';
-    tabs[3].textContent = 'वोट विवरण (' + devData.votes.length + ')';
-  }
+  document.querySelectorAll('[data-devt]').forEach((tab) => {
+    const k = tab.dataset.devt;
+    if (k === 'active') tab.textContent = 'चालू चुनाव (' + devData.elections.filter((e) => !e.closed).length + ')';
+    else if (k === 'elections') tab.textContent = 'सभी चुनाव (' + devData.elections.length + ')';
+    else if (k === 'votes') tab.textContent = 'सभी वोट (' + devData.votes.length + ')';
+    else if (k === 'users') tab.textContent = 'यूज़र्स (' + devData.users.length + ')';
+    else if (k === 'complaints') tab.textContent = 'शिकायतें (' + (((devData.usage || {}).openComplaints) || 0) + ')';
+    else if (k === 'applications') tab.textContent = 'खाता आवेदन (' + (((devData.usage || {}).pendingApplications) || 0) + ')';
+    else if (k === 'summary') tab.textContent = 'सारांश';
+  });
 }
 
 let devLiveSource = null;
@@ -3083,7 +3702,7 @@ function startDevLive() {
     while (list.children.length > 12) list.removeChild(list.lastChild);
     scheduleDevRefresh();
   });
-  ['election-status', 'user-deleted'].forEach((evName) => {
+  ['election-status', 'user-deleted', 'account-application', 'account-application-decision'].forEach((evName) => {
     devLiveSource.addEventListener(evName, () => scheduleDevRefresh());
   });
   devLiveSource.onopen = () => {
@@ -3225,8 +3844,7 @@ function paintDevElection(d) {
       ${rows.map((v) => `
         <div class="dev-vote-item">
           <div class="dvv-top">
-            <b>${esc(v.userName)}</b>
-            ${v.adopted ? '<span class="mini-badge">पहले बिना लॉगिन वोट, बाद में नाम जुड़ा</span>' : (v.linkedName ? '<span class="mini-badge">नाम बाद में जुड़ा</span>' : '')}
+            <b>${esc(v.userName)}</b>${devVoteIdentityHTML(v)}
           </div>
           <div class="dvv-mid">
             <span><b>${esc(v.userName)}</b> ने ${symbolSVG(v.candidateSymbol, 17)} <b>${esc(v.candidateName)}</b> को वोट दिया</span>
@@ -3397,6 +4015,7 @@ function devBodyHTML() {
   if (devTab === 'users') return devUsersHTML();
   if (devTab === 'elections') return devElectionsHTML();
   if (devTab === 'complaints') return devComplaintsHTML();
+  if (devTab === 'applications') return devApplicationsHTML();
   return devVotesHTML();
 }
 
@@ -3467,7 +4086,7 @@ function devSummaryHTML() {
           ${recentVotes.map((v) => `
             <tr>
               <td class="nowrap">${esc(timeAgo(v.at))}</td>
-              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}</td>
+              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}${devVoteIdentityHTML(v)}</td>
               <td><span class="cand-cell">${symbolSVG(v.candidateSymbol, 16)} ${esc(v.candidateName)}</span></td>
               <td class="nowrap"><a href="#/e/${v.electionCode}" class="link">${esc(v.electionCode)}</a></td>
             </tr>`).join('') || '<tr><td colspan="4" class="muted">कोई वोट नहीं</td></tr>'}
@@ -3509,11 +4128,11 @@ function devUsersHTML() {
     </div>
     <div class="table-wrap">
       <table class="dev-table" id="devUsersTable">
-        <thead><tr><th>नाम</th><th>जुड़े</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस</th><th>आख़िरी लॉगिन</th></tr></thead>
+        <thead><tr><th>नाम / Username</th><th>जुड़े</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस</th><th>आख़िरी लॉगिन</th></tr></thead>
         <tbody>
           ${devData.users.map((u) => `
-            <tr data-name="${esc(u.name.toLowerCase())}">
-              <td><b>${esc(u.name)}</b>${u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}</td>
+            <tr data-name="${esc((u.name + ' ' + (u.username || '')).toLowerCase())}">
+              <td><b>${esc(u.name)}</b>${u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}<div class="muted small">${u.username ? '@' + esc(u.username) : 'username नहीं'}${u.accountStatus && u.accountStatus !== 'active' ? ' · ' + esc(u.accountStatus) : ''}</div></td>
               <td class="nowrap">${esc(timeAgo(u.createdAt))}</td>
               <td>${u.electionsCreated ? `<button class="chip-btn" data-user-elections="${esc(u.id)}">${u.electionsCreated}</button>` : '0'}</td>
               <td>${u.votesCast}</td>
@@ -3578,9 +4197,9 @@ function devVotesHTML() {
         <thead><tr><th>समय</th><th>मतदाता का नाम</th><th>चुनाव</th><th>उम्मीदवार</th><th>पार्टी</th><th>डिवाइस</th></tr></thead>
         <tbody>
           ${devData.votes.map((v) => `
-            <tr data-name="${esc((v.userName + ' ' + v.candidateName + ' ' + v.electionCode + ' ' + v.electionTitle).toLowerCase())}">
+            <tr data-name="${esc((v.userName + ' ' + (v.userUsername || '') + ' ' + (v.linkedUsername || '') + ' ' + v.candidateName + ' ' + v.electionCode + ' ' + v.electionTitle).toLowerCase())}">
               <td class="nowrap">${esc(fullDate(v.at))}</td>
-              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}${v.adopted || v.linkedName ? ' <span class="mini-badge">नाम बाद में जुड़ा</span>' : ''}</td>
+              <td><b>${esc(v.userName)}</b>${v.userIsDemo ? ' <span class="mini-badge">डेमो</span>' : ''}${devVoteIdentityHTML(v)}</td>
               <td class="nowrap"><a class="link" href="#/e/${v.electionCode}">${esc(v.electionCode)}</a><div class="muted small">${esc(v.electionTitle)}</div></td>
               <td><span class="cand-cell">${symbolSVG(v.candidateSymbol, 16)} ${esc(v.candidateName)}</span></td>
               <td>${esc(v.candidateParty || '—')}</td>
@@ -3593,7 +4212,46 @@ function devVotesHTML() {
   </div>`;
 }
 
+function devVoteIdentityHTML(v) {
+  const uname = v.linkedUsername || v.userUsername;
+  let out = '';
+  if (uname) out += ' <span class="muted small">@' + esc(uname) + '</span>';
+  if (v.voteSource === 'guest-first' || v.adopted || v.linkedName) {
+    out += ' <span class="mini-badge">पहले मेहमान वोट' + (uname ? ' → बाद में @' + esc(uname) : ' → बाद में नाम जुड़ा') + '</span>';
+  } else if (v.voteSource === 'guest') {
+    out += ' <span class="mini-badge">मेहमान वोट (खाता नहीं)</span>';
+  }
+  return out;
+}
+
 function bindDevBody() {
+  /* 🙋 खाता आवेदन मंज़ूर/अस्वीकार (Team Janmat निर्णय) */
+  const finishApplication = async (id, action, button) => {
+    const noteEl = document.getElementById('app-note-' + id);
+    const note = noteEl ? noteEl.value.trim() : '';
+    let body = { note };
+    if (action === 'approve') {
+      const picked = document.querySelector('input[name="appmode-' + id + '"]:checked');
+      if (picked && picked.value.indexOf('replace:') === 0) body.replaceUserId = picked.value.slice('replace:'.length);
+      else if (picked && picked.value === 'additional') body.mode = 'additional';
+    }
+    if (action === 'reject' && !window.confirm('आवेदन ' + id + ' अस्वीकार कर दें?')) return;
+    button.disabled = true;
+    button.textContent = '…';
+    try {
+      await api('/api/dev/applications/' + encodeURIComponent(id) + '/' + action, { method: 'POST', body });
+      await loadDevApplications();
+      await refreshDevData();
+      toast(action === 'approve' ? 'आवेदन मंज़ूर — खाता तैयार है ✅' : 'आवेदन अस्वीकार कर दिया', 'ok');
+    } catch (e) {
+      toast(e.message || 'निर्णय सेव नहीं हुआ', 'err');
+      button.disabled = false;
+      button.textContent = action === 'approve' ? 'मंज़ूर करें' : 'अस्वीकार करें';
+    }
+  };
+  $$('[data-app-approve]').forEach((b) => b.addEventListener('click', () => finishApplication(b.dataset.appApprove, 'approve', b)));
+  $$('[data-app-reject]').forEach((b) => b.addEventListener('click', () => finishApplication(b.dataset.appReject, 'reject', b)));
+
   /* 📩 शिकायत "हल हुई" बटन */
   $$('[data-cid-resolve]').forEach((b) => {
     b.addEventListener('click', async () => {
@@ -3648,6 +4306,7 @@ function bindDevBody() {
     devTab = tab;
     $$('[data-devt]').forEach((b) => b.classList.toggle('active', b.dataset.devt === tab));
     if (tab === 'complaints') await loadDevComplaints();
+    if (tab === 'applications') await loadDevApplications();
     document.getElementById('devBody').innerHTML = devBodyHTML();
     bindDevBody();
   };
@@ -3671,8 +4330,8 @@ function bindDevBody() {
   const exportUsers = document.getElementById('exportUsers');
   if (exportUsers) {
     exportUsers.addEventListener('click', () => {
-      const rows = [['नाम', 'जुड़े', 'बनाए चुनाव', 'दिए वोट', 'डिवाइस', 'डेमो']];
-      devData.users.forEach((u) => rows.push([u.name, fullDate(u.createdAt), u.electionsCreated, u.votesCast, u.deviceCount, u.isDemo ? 'हाँ' : 'नहीं']));
+      const rows = [['नाम', 'Username', 'स्थिति', 'जुड़े', 'बनाए चुनाव', 'दिए वोट', 'डिवाइस', 'डेमो']];
+      devData.users.forEach((u) => rows.push([u.name, u.username || '', u.accountStatus || 'active', fullDate(u.createdAt), u.electionsCreated, u.votesCast, u.deviceCount, u.isDemo ? 'हाँ' : 'नहीं']));
       downloadFile('janmat-users.csv', '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
     });
   }
@@ -3687,8 +4346,8 @@ function bindDevBody() {
   const exportVotes = document.getElementById('exportVotes');
   if (exportVotes) {
     exportVotes.addEventListener('click', () => {
-      const rows = [['समय', 'मतदाता', 'चुनाव कोड', 'चुनाव शीर्षक', 'उम्मीदवार', 'पार्टी', 'डिवाइस']];
-      devData.votes.forEach((v) => rows.push([fullDate(v.at), v.userName, v.electionCode, v.electionTitle, v.candidateName, v.candidateParty, v.deviceShort]));
+      const rows = [['समय', 'मतदाता', 'Username', 'वोट-स्रोत', 'चुनाव कोड', 'चुनाव शीर्षक', 'उम्मीदवार', 'पार्टी', 'डिवाइस']];
+      devData.votes.forEach((v) => rows.push([fullDate(v.at), v.userName, v.linkedUsername || v.userUsername || '', v.voteSource || '', v.electionCode, v.electionTitle, v.candidateName, v.candidateParty, v.deviceShort]));
       downloadFile('janmat-votes.csv', '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
     });
   }
@@ -3854,7 +4513,7 @@ function renderHow() {
       <div class="panel">
         <div class="section-title"><h2>अक्सर पूछे जाने वाले सवाल</h2></div>
         <div class="faq">
-          <div><h4>लॉगिन में पासवर्ड क्यों नहीं?</h4><p>यह मंच नाम-आधारित है — जैसा आपने चाहा। सिर्फ़ नाम लिखकर लॉगिन होता है। इसलिए अपना वही नाम दोबारा लिखें, वरना आपका खाता अलग बन जाएगा।</p></div>
+          <div><h4>लॉगिन में मोबाइल नंबर क्यों नहीं?</h4><p>यह मंच स्थायी username + 6–10 अंकों के PIN पर चलता है — मोबाइल, Gmail या OTP नहीं माँगा जाता। आपका नाम सिर्फ़ प्रोफ़ाइल में दिखता है। PIN भूलने पर लॉगिन कार्ड वाला रिकवरी कोड काम आएगा; username भूलने पर Team Janmat को आवेदन भेजना होगा।</p></div>
           <div><h4>एक व्यक्ति कितनी बार वोट कर सकता है?</h4><p>हर चुनाव में आपका सिर्फ़ <b>एक वोट</b> गिना जाता है — आपके खाते से एक, और आपके डिवाइस से भी एक। दूसरे नाम से भी उसी डिवाइस से दोबारा वोट नहीं हो सकता।</p></div>
           <div><h4>एक दिन में कितने चुनाव बना सकते हैं?</h4><p>हर उपयोगकर्ता 1 दिन (IST) में अधिकतम <b>2 चुनाव</b> बना सकता है। सीमा आधी रात (IST) पर रीसेट होती है।</p></div>
           <div><h4>किसने किसको वोट दिया, कौन देख सकता है?</h4><p>सिर्फ़ <b>डेवलपर</b> (पासवर्ड से)। चुनाव बनाने वाला भी नहीं देख सकता कि किसने किसको वोट दिया — उसे भी सिर्फ़ गिनती दिखती है। सार्वजनिक रूप से सबको सिर्फ़ परिणाम दिखता है।</p></div>
@@ -3903,7 +4562,7 @@ function renderDisclaimer() {
         <ul>
           <li><b>एक डिवाइस = एक वोट</b> प्रति चुनाव। एक ही डिवाइस से दूसरे नाम पर भी दोबारा वोट नहीं हो सकता।</li>
           <li>हर उपयोगकर्ता <b>1 दिन में अधिकतम 2 चुनाव</b> बना सकता है।</li>
-          <li>लॉगिन सिर्फ़ नाम से है (कोई पासवर्ड/OTP नहीं)। इसलिए “एक नाम = एक खाता” — इसकी पुष्टि स्वयं उपयोगकर्ता की ज़िम्मेदारी है।</li>
+          <li>लॉगिन स्थायी username + गुप्त PIN से है (कोई मोबाइल/Gmail/OTP नहीं)। एक जैसे नाम के कई लोग हो सकते हैं, पर हर username सिर्फ़ एक खाते का होता है। अपना username, PIN और रिकवरी कोड सुरक्षित रखना उपयोगकर्ता की ज़िम्मेदारी है। एक फ़ोन पर सीधे एक ही खाता बनता है; दूसरा खाता Team Janmat की मंज़ूरी से बनेगा।</li>
         </ul>
 
         <h3>5. गोपनीयता व डेटा</h3>
@@ -3961,11 +4620,11 @@ function renderTerms() {
         </div>
 
         <h3>1. स्वीकृति</h3>
-        <p>साइट का उपयोग करने, नाम से लॉगिन करने, चुनाव बनाने या वोट देने का मतलब है कि आप इन शर्तों और <a href="#/privacy">गोपनीयता नीति</a> से सहमत हैं। यदि आप सहमत नहीं हैं तो कृपया साइट का उपयोग न करें।</p>
+        <p>साइट का उपयोग करने, username से लॉगिन करने, चुनाव बनाने या वोट देने का मतलब है कि आप इन शर्तों और <a href="#/privacy">गोपनीयता नीति</a> से सहमत हैं। यदि आप सहमत नहीं हैं तो कृपया साइट का उपयोग न करें।</p>
 
         <h3>2. पात्रता</h3>
         <ul>
-          <li>आपको अपना <b>वास्तविक या स्थायी नाम</b> लिखना चाहिए (कोई पासवर्ड/OTP नहीं है, इसलिए नाम ही आपकी पहचान है)।</li>
+          <li>आपको अपना <b>वास्तविक या स्थायी नाम</b> लिखना चाहिए और अपने खाते के लिए <b>मज़बूत पासवर्ड</b> रखना चाहिए (मोबाइल/OTP नहीं लगता)।</li>
           <li>किसी और का नाम लिखकर उसकी पहचान का दुरुपयोग करना मना है।</li>
           <li>18 वर्ष से कम आयु के उपयोगकर्ताओं को अभिभावक की सहमति से ही उपयोग करना चाहिए।</li>
         </ul>
@@ -3977,7 +4636,7 @@ function renderTerms() {
         <ul>
           <li><b>एक डिवाइस = एक वोट</b> प्रति चुनाव। एक ही डिवाइस से दूसरे नाम लेकर भी दोबारा वोट नहीं हो सकता।</li>
           <li>हर उपयोगकर्ता <b>एक दिन (IST) में अधिकतम 2 चुनाव</b> बना सकता है।</li>
-          <li>“एक नाम = एक खाता” — वही नाम दोबारा लिखने पर वही खाता खुलता है।</li>
+          <li>“Username + PIN = आपका खाता” — वही username और सही PIN लिखने पर ही खाता खुलता है। उसी नाम के दूसरे व्यक्ति का username अलग होगा और खाता भी अलग रहेगा।</li>
           <li>आयोजक कभी भी अपना चुनाव बंद कर सकता है; बंद चुनाव में वोट नहीं पड़ सकते।</li>
         </ul>
 
@@ -4030,7 +4689,8 @@ function renderPrivacy() {
         <h3>1. हम कौन-सा डेटा लेते हैं</h3>
         <ul>
           <li><b>नाम</b> — जो आप लॉगिन में लिखते हैं।</li>
-          <li><b>टोकन</b> — आपके लॉगिन को याद रखने के लिए एक तकनीकी कोड (आपके ब्राउज़र में सुरक्षित)।</li>
+          <li><b>पासवर्ड (सिर्फ़ हैश के रूप में)</b> — आपका असली पासवर्ड 서버 पर कभी नहीं रखा जाता; सिर्फ़ उसका पहचान-रहित हैश रखा जाता है, जिससे पासवर्ड वापस पढ़ा नहीं जा सकता। रिकवरी कोड का भी सिर्फ़ हैश रहता है।</li>
+          <li><b>टोकन</b> — आपके लॉगिन सत्र को याद रखने के लिए एक तकनीकी कोड। ब्राउज़र में आपका token रहता है और सर्वर पर उसका सिर्फ़ हैश रहता है; सत्र की समय-सीमा होती है।</li>
           <li><b>डिवाइस पहचान</b> — “एक डिवाइस = एक वोट” लागू करने के लिए डिवाइस फिंगरप्रिंट का हैश (बिना कच्चे डेटा के)।</li>
           <li><b>IP पता और ब्राउज़र जानकारी</b> — सिर्फ़ दुरुपयोग रोकने और सीमा लागू करने के लिए (सर्वर लॉग में)।</li>
           <li><b>वोट</b> — आपने किस चुनाव में किसको वोट दिया (गिनती और परिणाम के लिए)।</li>
@@ -4066,7 +4726,7 @@ function renderPrivacy() {
         <p>डेवलपर पासवर्ड सर्वर पर सुरक्षित रहता है, सत्र समय-सीमा (12 घंटे) और सीमित प्रयास लागू हैं। फिर भी इंटरनेट पर कोई भी सिस्टम 100% अभेद्य नहीं होता — अत्यंत संवेदनशील जानकारी न डालें।</p>
 
         <h3>7. कुकीज़ / ट्रैकिंग</h3>
-        <p>हम विज्ञापन कुकीज़ या थर्ड-पार्टी ट्रैकर नहीं लगाते। सिर्फ़ आपकी पसंद (थीम, लॉगिन) ब्राउज़र के localStorage में रहती है, जिसे आप कभी भी ब्राउज़र डेटा साफ़ करके मिटा सकते हैं।</p>
+        <p>हम विज्ञापन कुकीज़ या थर्ड-पार्टी ट्रैकर नहीं लगाते। आपकी पसंद (थीम), लॉगिन सत्र और "एक डिवाइस = एक वोट" के लिए डिवाइस पहचान आपके ब्राउज़र के localStorage, कुकी और IndexedDB में रह सकती है। ब्राउज़र का पूरा साइट-डेटा साफ़ करने पर ये हट जाते हैं, पर तब आपको फिर से username + PIN से लॉगिन करना होगा।</p>
 
         <h3>8. बच्चे</h3>
         <p>यह मंच 13 वर्ष से कम बच्चों के लिए नहीं बनाया गया; अभिभावक की सहमति के बिना उपयोग न करें।</p>
@@ -4365,7 +5025,8 @@ async function boot() {
     if (auto.ok && auto.user && !auto.already) {
       setTimeout(() => toast('स्वागत है, ' + auto.user.name + ' — आपका खाता पहचान लिया गया', 'ok'), 500);
     } else if (auto.hint && auto.hint.name) {
-      savedNameHint = auto.hint.name;   /* लॉगिन पेज पर नाम पहले से भरा मिलेगा */
+      savedNameHint = auto.hint.name;
+      savedAccountHint = auto.hint;   /* सिर्फ़ छिपा username संकेत — अपने आप लॉगिन नहीं */
     }
   }
   renderNavAuth();

@@ -64,10 +64,14 @@ else
 fi
 
 # --- login ------------------------------------------------------------------
-LOGIN=$(curl -fsS -X POST "$BASE/api/auth/login" -H 'content-type: application/json' \
-  -d "{\"name\":\"CI जाँच\",\"deviceId\":\"$DEVICE\"}")
+LOGIN=$(curl -fsS -X POST "$BASE/api/auth/register" -H 'content-type: application/json' \
+  -d "{\"name\":\"CI जाँच\",\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
 TOKEN=$(printf '%s' "$LOGIN" | json_get token)
-[ -n "$TOKEN" ] && ok "नाम से लॉगिन" || { bad "लॉगिन फेल"; exit 1; }
+[ -n "$TOKEN" ] && [ "$(printf '%s' "$LOGIN" | json_get user.username)" = "ci_jaanch" ] && ok "unique username + PIN से नया खाता" || { bad "लॉगिन फेल"; exit 1; }
+DUPUSER=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/auth/register" -H 'content-type: application/json' -d "{\"name\":\"दूसरा CI\",\"username\":\"ci_jaanch\",\"password\":\"592847\",\"deviceId\":\"dusri-device-999\"}")
+[ "$DUPUSER" = "409" ] && ok "वही username दूसरे को नहीं मिला (409)" || bad "duplicate username रुका नहीं (मिला $DUPUSER)"
+WRONGPW=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d "{\"username\":\"ci_jaanch\",\"password\":\"999111\",\"deviceId\":\"dusri-device-999\"}")
+[ "$WRONGPW" = "401" ] && ok "सिर्फ़ username जानकर घुसना रुका (गलत PIN 401)" || bad "गलत PIN रुका नहीं (मिला $WRONGPW)"
 
 AUTH=(-H "x-user-token: $TOKEN" -H "x-device-id: $DEVICE")
 

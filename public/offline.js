@@ -55,7 +55,39 @@
   /* ------------------------------ seed ----------------------------- */
   /* koi demo/fake data nahi — bilkul khali DB. Jo user khud banayega, wahi dikhega. */
   function seed() {
-    return { version: 3, createdAt: Date.now(), users: [], elections: [], devSessions: {} };
+    return { version: 3, createdAt: Date.now(), users: [], elections: [], devSessions: {}, deviceOwner: {}, fpOwner: {}, deviceAccounts: {}, fpAccounts: {}, accountApplications: [] };
+  }
+  function migrateOfflineDb() {
+    if (!db || typeof db !== 'object') return;
+    if (!Array.isArray(db.users)) db.users = [];
+    if (!Array.isArray(db.elections)) db.elections = [];
+    if (!db.devSessions || typeof db.devSessions !== 'object') db.devSessions = {};
+    if (!db.deviceOwner || typeof db.deviceOwner !== 'object') db.deviceOwner = {};
+    if (!db.fpOwner || typeof db.fpOwner !== 'object') db.fpOwner = {};
+    if (!db.deviceAccounts || typeof db.deviceAccounts !== 'object') db.deviceAccounts = {};
+    if (!db.fpAccounts || typeof db.fpAccounts !== 'object') db.fpAccounts = {};
+    if (!Array.isArray(db.accountApplications)) db.accountApplications = [];
+    db.users.forEach(function (u) {
+      if (!u || typeof u !== 'object') return;
+      if (typeof u.username !== 'string') u.username = u.username ? String(u.username) : null;
+      if (!u.accountStatus) u.accountStatus = u.deletedAt ? 'deleted' : 'active';
+      if (!u.devices || typeof u.devices !== 'object') u.devices = {};
+      if (!u.tokens || typeof u.tokens !== 'object') u.tokens = {};
+      Object.keys(u.devices).forEach(function (dk) {
+        if (!Array.isArray(db.deviceAccounts[dk])) db.deviceAccounts[dk] = [];
+        if (db.deviceAccounts[dk].indexOf(u.id) === -1) db.deviceAccounts[dk].push(u.id);
+      });
+    });
+    Object.keys(db.deviceOwner).forEach(function (dk) {
+      var uid = db.deviceOwner[dk];
+      if (!Array.isArray(db.deviceAccounts[dk])) db.deviceAccounts[dk] = [];
+      if (uid && db.deviceAccounts[dk].indexOf(uid) === -1) db.deviceAccounts[dk].push(uid);
+    });
+    Object.keys(db.fpOwner).forEach(function (fk) {
+      var uid = db.fpOwner[fk];
+      if (!Array.isArray(db.fpAccounts[fk])) db.fpAccounts[fk] = [];
+      if (uid && db.fpAccounts[fk].indexOf(uid) === -1) db.fpAccounts[fk].push(uid);
+    });
   }
 
   /* ---------------------------- storage ---------------------------- */
@@ -65,7 +97,7 @@
       var raw = localStorage.getItem(DB_KEY);
       if (raw) {
         var parsed = JSON.parse(raw);
-        if (parsed && parsed.version === 3) { db = parsed; return; }
+        if (parsed && parsed.version === 3) { db = parsed; migrateOfflineDb(); return; }
       }
     } catch (e) {}
     db = seed();
@@ -125,12 +157,183 @@
     var used = db.elections.filter(function (e) { return e.creatorId === u.id && istDay(e.createdAt) === today; }).length;
     return { limit: DAILY_LIMIT, used: used, remaining: Math.max(0, DAILY_LIMIT - used), resetsAt: nextMidnight() };
   }
-  function pubUser(u) { return { id: u.id, name: u.name, createdAt: u.createdAt }; }
+  function pubUser(u) { return { id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active', createdAt: u.createdAt }; }
   function findElection(code) {
     var c = clean(code, 16).toUpperCase();
     for (var i = 0; i < db.elections.length; i++) if (db.elections[i].code === c) return db.elections[i];
     return null;
   }
+  function hashPreview(secret, salt) {
+    var s = String(salt || '') + '|' + String(secret || '');
+    var h1 = 2166136261, h2 = 5381;
+    for (var i = 0; i < s.length; i++) { h1 = Math.imul(h1 ^ s.charCodeAt(i), 16777619); h2 = (Math.imul(h2, 33) ^ s.charCodeAt(i)) >>> 0; }
+    return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16);
+  }
+  function setPreviewPassword(user, password) {
+    var salt = rid(8);
+    user.pwHash = salt + ':' + hashPreview(password, salt);
+    var raw = '';
+    for (var i = 0; i < 12; i++) raw += CODE_A[Math.floor(Math.random() * CODE_A.length)];
+    var code = raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
+    var rsalt = rid(8);
+    user.recoveryHash = rsalt + ':' + hashPreview(raw, rsalt);
+    return code;
+  }
+  function checkPreview(secret, stored) {
+    var parts = String(stored || '').split(':');
+    return parts.length === 2 && hashPreview(secret, parts[0]) === parts[1];
+  }
+  function normalizeUsername(raw) {
+    return String(raw == null ? '' : raw).trim().toLowerCase().replace(/^@+/, '').replace(/\s+/g, '_');
+  }
+  function validateUsername(raw) {
+    var u = normalizeUsername(raw);
+    if (!u) return { error: 'अपना username चुनें — यही आपकी असली login-ID होगी।' };
+    if (!/^[a-z][a-z0-9_]{2,19}$/.test(u)) return { error: 'Username 3–20 अक्षरों का रखें: शुरुआत अंग्रेज़ी अक्षर (a–z) से, फिर अक्षर, अंक या _ चलेंगे (जैसे pawan_verma)।' };
+    if (u.indexOf('__') !== -1 || u.charAt(u.length - 1) === '_') return { error: 'Username में लगातार दो _ या अंत में _ न रखें।' };
+    if (['developer','dev','admin','administrator','janmat','a2zjanmat','teamjanmat','janmat_team','moderator','root','support','help','official','election','vote','electioncommission','jansunwai','pawan_admin'].indexOf(u) !== -1) return { error: 'यह username आरक्षित है, कृपया दूसरा चुनें।' };
+    return { username: u };
+  }
+  function validatePin(pin, username) {
+    var s = String(pin == null ? '' : pin);
+    if (!/^[0-9]{6,10}$/.test(s)) return { error: 'PIN सिर्फ़ 6 से 10 अंकों का रखें (सिर्फ़ नंबर 0–9)।' };
+    if (/^([0-9])\1+$/.test(s)) return { error: 'PIN में सारे अंक एक जैसे न रखें — कुछ अलग चुनें।' };
+    var asc = true, desc = true;
+    for (var i = 1; i < s.length; i++) {
+      var d = Number(s[i]) - Number(s[i - 1]);
+      if (d !== 1) asc = false;
+      if (d !== -1) desc = false;
+    }
+    if (asc || desc || ['123456','654321','1234567','12345678','123456789','1234567890','987654','9876543210','112233','121212','123123','111111','000000','102030','246810','135790','5201314'].indexOf(s) !== -1) return { error: 'यह PIN बहुत आम है (जैसे 123456) — कोई ऐसा नंबर चुनें जो सिर्फ़ आपको याद रहे।' };
+    if (username && String(username).indexOf(s) !== -1) return { error: 'PIN अपने username जैसा न रखें।' };
+    return { password: s };
+  }
+  function maskUsername(u) {
+    var s = String(u || '');
+    if (s.length <= 3) return s ? s.charAt(0) + '***' : null;
+    return s.slice(0, 2) + '***' + s.slice(-2);
+  }
+  function isActiveUser(u) { return !!(u && !u.deletedAt && (u.accountStatus || 'active') === 'active'); }
+  function findUserByUsername(username) {
+    var u = normalizeUsername(username);
+    if (!u) return null;
+    for (var i = 0; i < db.users.length; i++) if (db.users[i].username && normalizeUsername(db.users[i].username) === u) return db.users[i];
+    return null;
+  }
+  function previewHash(secret) {
+    var salt = rid(8);
+    return salt + ':' + hashPreview(secret, salt);
+  }
+  function makeRecovery() {
+    var raw = '';
+    for (var i = 0; i < 12; i++) raw += CODE_A[Math.floor(Math.random() * CODE_A.length)];
+    return raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
+  }
+  function syncApplications() {
+    if (!Array.isArray(db.accountApplications)) db.accountApplications = [];
+    var now = Date.now(); var changed = false;
+    db.accountApplications.forEach(function (a) {
+      if (a && a.status === 'pending' && a.expiresAt && now > a.expiresAt) { a.status = 'expired'; a.decidedAt = now; changed = true; }
+    });
+    if (changed) save();
+  }
+  function usernameTaken(username, exceptUserId) {
+    var u = normalizeUsername(username);
+    if (!u) return true;
+    syncApplications();
+    for (var i = 0; i < db.users.length; i++) {
+      var x = db.users[i];
+      if (x && x.username && normalizeUsername(x.username) === u && x.id !== exceptUserId) return true;
+    }
+    return db.accountApplications.some(function (a) { return a && a.status === 'pending' && a.desiredUsername === u; });
+  }
+  function usernameSuggestions(base) {
+    var out = [];
+    var root = normalizeUsername(base).replace(/[^a-z0-9_]/g, '').slice(0, 16) || 'user';
+    for (var i = 1; i <= 99 && out.length < 3; i++) {
+      var cand = (root + (i < 10 ? '0' + i : String(i))).slice(0, 20);
+      if (validateUsername(cand).username && !usernameTaken(cand)) out.push(cand);
+    }
+    return out;
+  }
+  function recordDeviceAccount(user, deviceKey, fpKey) {
+    if (!user || !deviceKey) return;
+    if (!Array.isArray(db.deviceAccounts[deviceKey])) db.deviceAccounts[deviceKey] = [];
+    if (db.deviceAccounts[deviceKey].indexOf(user.id) === -1) db.deviceAccounts[deviceKey].push(user.id);
+    if (fpKey) {
+      if (!Array.isArray(db.fpAccounts[fpKey])) db.fpAccounts[fpKey] = [];
+      if (db.fpAccounts[fpKey].indexOf(user.id) === -1) db.fpAccounts[fpKey].push(user.id);
+    }
+  }
+  function deviceConflictUsers(deviceKey, fpKey) {
+    var ids = [];
+    function add(v) {
+      if (Array.isArray(v)) v.forEach(function (x) { if (x && ids.indexOf(x) === -1) ids.push(x); });
+      else if (v && ids.indexOf(v) === -1) ids.push(v);
+    }
+    if (deviceKey) { add(db.deviceAccounts[deviceKey]); add(db.deviceOwner[deviceKey]); }
+    if (fpKey) { add(db.fpAccounts[fpKey]); add(db.fpOwner[fpKey]); }
+    db.users.forEach(function (u) { if (u && deviceKey && u.devices && u.devices[deviceKey] && ids.indexOf(u.id) === -1) ids.push(u.id); });
+    return ids.map(function (id) { return findUserById(id); }).filter(isActiveUser);
+  }
+  function adoptGuestVotes(user, deviceKey) {
+    var key = 'g:' + deviceKey;
+    var adopted = 0;
+    db.elections.forEach(function (e) {
+      var gv = e.votes && e.votes[key];
+      if (!gv) return;
+      var mine = e.votes[user.id];
+      if (mine) {
+        var guestOlder = (Number(gv.at) || 0) <= (Number(mine.at) || 0);
+        var kept = guestOlder ? gv : mine;
+        var dropped = guestOlder ? mine : gv;
+        if (!Array.isArray(e.mergedVotes)) e.mergedVotes = [];
+        e.mergedVotes.push({ at: Date.now(), userId: user.id, guestId: key, keptCandidate: kept.c || null, droppedCandidate: dropped.c || null, reason: 'guest+account same person' });
+        delete e.votes[key];
+        e.votes[user.id] = { c: kept.c, at: kept.at || Date.now(), device: kept.device || deviceKey, guest: false, via: guestOlder ? 'guest' : (mine.via || 'account'), sourceGuest: true, linkedName: user.name, linkedUsername: user.username || null, adoptedAt: Date.now() };
+      } else {
+        delete e.votes[key];
+        e.votes[user.id] = { c: gv.c, at: gv.at || Date.now(), device: gv.device || deviceKey, guest: false, via: 'guest', sourceGuest: true, originalGuestId: key, linkedName: user.name, linkedUsername: user.username || null, adoptedAt: Date.now() };
+      }
+      if (e.devices && e.devices[deviceKey]) e.devices[deviceKey].userId = user.id;
+      adopted++;
+    });
+    return adopted;
+  }
+  function mergeAccountInto(oldUser, newUser) {
+    if (!oldUser || !newUser || oldUser.id === newUser.id) return;
+    db.elections.forEach(function (e) {
+      if (e.creatorId === oldUser.id) e.creatorId = newUser.id;
+      var ov = e.votes && e.votes[oldUser.id];
+      var nv = e.votes && e.votes[newUser.id];
+      if (ov && !nv) { delete e.votes[oldUser.id]; var copy = {}; Object.keys(ov).forEach(function (k) { copy[k] = ov[k]; }); copy.mergedFrom = oldUser.id; e.votes[newUser.id] = copy; }
+      else if (ov && nv) {
+        var keepOld = (Number(ov.at) || 0) <= (Number(nv.at) || 0);
+        if (!Array.isArray(e.mergedVotes)) e.mergedVotes = [];
+        e.mergedVotes.push({ at: Date.now(), userId: newUser.id, fromUserId: oldUser.id, keptCandidate: (keepOld ? ov : nv).c || null, droppedCandidate: (keepOld ? nv : ov).c || null, reason: 'account replaced' });
+        if (keepOld) { var c2 = {}; Object.keys(ov).forEach(function (k) { c2[k] = ov[k]; }); c2.mergedFrom = oldUser.id; e.votes[newUser.id] = c2; }
+        delete e.votes[oldUser.id];
+      }
+      if (e.devices) Object.keys(e.devices).forEach(function (dk) { if (e.devices[dk] && e.devices[dk].userId === oldUser.id) e.devices[dk].userId = newUser.id; });
+    });
+    function remap(bag) {
+      if (!bag || typeof bag !== 'object') return;
+      Object.keys(bag).forEach(function (k) {
+        if (Array.isArray(bag[k])) {
+          var out = [];
+          bag[k].forEach(function (x) { var y = x === oldUser.id ? newUser.id : x; if (out.indexOf(y) === -1) out.push(y); });
+          bag[k] = out;
+        } else if (bag[k] === oldUser.id) bag[k] = newUser.id;
+      });
+    }
+    remap(db.deviceOwner); remap(db.fpOwner); remap(db.deviceAccounts); remap(db.fpAccounts);
+    Object.keys(oldUser.devices || {}).forEach(function (dk) {
+      if (!newUser.devices[dk] || Number(oldUser.devices[dk]) > Number(newUser.devices[dk])) newUser.devices[dk] = oldUser.devices[dk];
+      recordDeviceAccount(newUser, dk, null);
+    });
+    oldUser.accountStatus = 'replaced'; oldUser.replacedBy = newUser.id; oldUser.replacedAt = Date.now(); oldUser.tokens = {};
+  }
+
   function findUserById(id) {
     for (var i = 0; i < db.users.length; i++) if (db.users[i].id === id) return db.users[i];
     return null;
@@ -258,13 +461,16 @@
     var token = clean(headers['x-user-token'] || '', 80);
     var viewer = null;
     for (var i = 0; i < db.users.length; i++) {
-      if (token && db.users[i].tokens && db.users[i].tokens[token]) { viewer = db.users[i]; break; }
+      var uv = db.users[i];
+      if (token && uv.pwHash && isActiveUser(uv) && uv.tokens && uv.tokens[token]) { viewer = uv; break; }
     }
     var devToken = clean(headers['x-dev-token'] || '', 80);
     var devOk = !!(devToken && db.devSessions[devToken] && db.devSessions[devToken].expiresAt > Date.now());
 
     var device = clean(body.deviceId || headers['x-device-id'] || '', 80);
     var deviceKey = device ? 'd:' + device.slice(0, 40) : 'local-preview';
+    var fpRaw = clean(headers['x-fp'] || '', 200);
+    var fpKey = /^[A-Za-z0-9_-]{16,200}$/.test(fpRaw) ? 'f:' + hashPreview(fpRaw, 'fp') : null;
 
     /* stats */
     if (method === 'GET' && parts[1] === 'stats') {
@@ -282,29 +488,216 @@
       };
     }
 
-    /* auth */
-    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
-      var name = clean(body.name, 30);
+    /* auth — Username + PIN (preview me bhi server wale hi niyam) */
+    function usersByName(nm) {
+      return db.users.filter(function (u) { return u && u.nameLower === nameKey(nm) && !u.deletedAt; });
+    }
+    function validName(body2) {
+      var name = clean(body2.name, 30);
       if (!name) throw err('अपना नाम लिखें।');
       if (name.length < 2) throw err('नाम कम से कम 2 अक्षरों का होना चाहिए।');
       if (!/^[\p{L}\p{M}\p{N} .'_-]+$/u.test(name)) throw err('नाम में सिर्फ़ अक्षर, अंक, स्पेस और . \' _ - चलेंगे।');
-      if (['developer', 'dev', 'admin', 'administrator', 'janmat', 'moderator', 'root'].indexOf(nameKey(name)) !== -1) {
-        throw err('यह नाम आरक्षित है, कृपया दूसरा नाम चुनें।');
-      }
-      var user = null;
-      for (var j = 0; j < db.users.length; j++) if (db.users[j].nameLower === nameKey(name)) { user = db.users[j]; break; }
-      if (!user) {
-        user = { id: rid(8), name: name, nameLower: nameKey(name), createdAt: Date.now(), lastLoginAt: Date.now(), isDemo: false, devices: {}, tokens: {} };
-        db.users.push(user);
-      } else {
-        user.lastLoginAt = Date.now();
-        user.name = name;
-      }
+      if (['developer', 'dev', 'admin', 'administrator', 'janmat', 'moderator', 'root'].indexOf(nameKey(name)) !== -1) throw err('यह नाम आरक्षित है, कृपया दूसरा नाम चुनें।');
+      return name;
+    }
+    function validUsername(body2) {
+      var uv = validateUsername(body2.username);
+      if (uv.error) throw err(uv.error, 400);
+      return uv.username;
+    }
+    function validPin(raw, username) {
+      var pv = validatePin(raw, username);
+      if (pv.error) throw err(pv.error, 400);
+      return pv.password;
+    }
+    function finishAuth(user, extra) {
+      if (!user.devices || typeof user.devices !== 'object') user.devices = {};
+      if (!user.tokens || typeof user.tokens !== 'object') user.tokens = {};
       user.devices[deviceKey] = Date.now();
+      if (!db.deviceOwner) db.deviceOwner = {};
+      db.deviceOwner[deviceKey] = user.id;
+      if (fpKey) { if (!db.fpOwner) db.fpOwner = {}; db.fpOwner[fpKey] = user.id; }
+      recordDeviceAccount(user, deviceKey, fpKey);
+      user.lastLoginAt = Date.now();
+      var adopted = adoptGuestVotes(user, deviceKey);
       var tk = rid(24);
       user.tokens[tk] = Date.now();
       save();
-      return { user: pubUser(user), token: tk, quota: quotaFor(user) };
+      var out = { user: pubUser(user), token: tk, quota: quotaFor(user), adoptedVotes: adopted };
+      if (extra) Object.keys(extra).forEach(function (k) { out[k] = extra[k]; });
+      return out;
+    }
+    function legacyClaimable(list) {
+      for (var i = 0; i < list.length; i++) {
+        var u = list[i];
+        if (!u.pwHash && isActiveUser(u) && ((db.deviceOwner && db.deviceOwner[deviceKey] === u.id) || (fpKey && db.fpOwner && db.fpOwner[fpKey] === u.id) || (u.devices && u.devices[deviceKey]))) return u;
+      }
+      return null;
+    }
+    function takenError(username) {
+      return err('यह username (@' + username + ') पहले से उपयोग में है — कोई दूसरा चुनें।', 409, 'USERNAME_TAKEN', { suggestions: usernameSuggestions(username) });
+    }
+
+    if ((method === 'GET' || method === 'POST') && parts[1] === 'auth' && parts[2] === 'username-available') {
+      var rawU = body.username || '';
+      query.split('&').forEach(function (kv) { var p2 = kv.split('='); if (p2[0] === 'u') rawU = decodeURIComponent(p2[1] || ''); });
+      var uv0 = validateUsername(rawU);
+      if (uv0.error) return { available: false, valid: false, error: uv0.error, username: normalizeUsername(rawU) };
+      var taken0 = usernameTaken(uv0.username, viewer ? viewer.id : null);
+      return { available: !taken0, valid: true, username: uv0.username, error: taken0 ? 'यह username पहले से उपयोग में है — कोई दूसरा चुनें।' : null, suggestions: taken0 ? usernameSuggestions(uv0.username) : [] };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'register') {
+      var rname = validName(body);
+      var runame = validUsername(body);
+      var rpin = validPin(body.password, runame);
+      if (usernameTaken(runame)) throw takenError(runame);
+      var same = usersByName(rname);
+      var lgr = legacyClaimable(same);
+      if (lgr) {
+        var rc0 = setPreviewPassword(lgr, rpin);
+        lgr.name = rname; lgr.username = runame; lgr.accountStatus = 'active';
+        return finishAuth(lgr, { claimed: true, recoveryCode: rc0 });
+      }
+      var conflicts = deviceConflictUsers(deviceKey, fpKey).filter(function (u) { return u.username || u.pwHash; });
+      if (conflicts.length) throw err('इस फ़ोन पर पहले से एक खाता बना हुआ है, इसलिए दूसरा खाता सीधे नहीं बनेगा। अगर आप परिवार के दूसरे सदस्य हैं तो नीचे "Username भूल गए / दूसरा खाता चाहिए" से appeal भेजें — Team Janmat जाँचकर मंज़ूरी देगी।', 409, 'DEVICE_HAS_ACCOUNT');
+      var nuser = { id: rid(8), name: rname, nameLower: nameKey(rname), username: runame, accountStatus: 'active', createdAt: Date.now(), lastLoginAt: Date.now(), isDemo: false, devices: {}, tokens: {} };
+      var rcode = setPreviewPassword(nuser, rpin);
+      db.users.push(nuser);
+      return finishAuth(nuser, { isNewAccount: true, recoveryCode: rcode, sameNameExists: same.length > 0 });
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'migrate') {
+      var mname = validName(body);
+      var muname = validUsername(body);
+      var mpin = validPin(body.password, muname);
+      if (usernameTaken(muname)) throw takenError(muname);
+      var mcands = usersByName(mname).filter(function (u) { return !u.username && isActiveUser(u); });
+      var mtarget = null;
+      var oldPw = String(body.oldPassword == null ? '' : body.oldPassword);
+      if (oldPw) for (var mi = 0; mi < mcands.length; mi++) if (mcands[mi].pwHash && checkPreview(oldPw, mcands[mi].pwHash)) { mtarget = mcands[mi]; break; }
+      if (!mtarget) mtarget = legacyClaimable(mcands);
+      if (!mtarget) throw err('पुराना खाता साबित नहीं हो सका। पुराना नाम और पुराना पासवर्ड ठीक से लिखें — या उसी पुराने फ़ोन से कोशिश करें जिससे खाता बना था।', 401, 'MIGRATION_FAILED');
+      var mrc = setPreviewPassword(mtarget, mpin);
+      mtarget.name = mname; mtarget.username = muname; mtarget.accountStatus = 'active'; mtarget.tokens = {};
+      return finishAuth(mtarget, { claimed: true, migrated: true, recoveryCode: mrc });
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'set-username') {
+      if (!viewer) throw err('लॉगिन नहीं है।', 401, 'LOGIN_REQUIRED');
+      if (viewer.username) throw err('आपके खाते पर username (@' + viewer.username + ') पहले से लगा है — username हमेशा के लिए वही रहता है।', 409, 'USERNAME_ALREADY_SET');
+      var suname = validUsername(body);
+      if (usernameTaken(suname, viewer.id)) throw takenError(suname);
+      viewer.username = suname; viewer.accountStatus = 'active'; save();
+      return { ok: true, user: pubUser(viewer), quota: quotaFor(viewer) };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
+      var luv = validateUsername(body.username);
+      if (luv.error) throw err('अपना सही username लिखें (जैसे pawan_verma) — लॉगिन अब नाम से नहीं, username से होता है।', 400, 'USERNAME_REQUIRED');
+      var lpass = String(body.password == null ? '' : body.password);
+      if (!lpass) throw err('अपना PIN लिखें।', 400, 'PASSWORD_REQUIRED');
+      var luser = findUserByUsername(luv.username);
+      if (!luser) {
+        syncApplications();
+        var pending = null;
+        db.accountApplications.forEach(function (a) { if (a && a.status === 'pending' && a.desiredUsername === luv.username) pending = a; });
+        if (pending) throw err('यह खाता अभी Team Janmat की जाँच में है (Pending)। मंज़ूरी मिलते ही इसी username + PIN से लॉगिन होगा।', 401, 'ACCOUNT_PENDING');
+        throw err('इस username का कोई खाता नहीं मिला। Username ध्यान से देखें — या "नया खाता बनाएँ" चुनें।', 401, 'ACCOUNT_NOT_FOUND');
+      }
+      if (!isActiveUser(luser)) throw err('यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।', 401, 'ACCOUNT_INACTIVE');
+      if (!luser.pwHash || !checkPreview(lpass, luser.pwHash)) throw err('PIN सही नहीं है। ध्यान से दोबारा लिखें — या "PIN भूल गए" से रिकवरी कोड इस्तेमाल करें।', 401, 'WRONG_PASSWORD');
+      return finishAuth(luser, {});
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'recover') {
+      var runame2 = validUsername(body);
+      var rpin2 = validPin(body.newPassword, runame2);
+      var ruser = findUserByUsername(runame2);
+      var want = String(body.recoveryCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!ruser || !isActiveUser(ruser) || want.length !== 12 || !ruser.recoveryHash || !checkPreview(want, ruser.recoveryHash)) throw err('रिकवरी कोड सही नहीं है (या इस username का खाता नहीं है)। लॉगिन कार्ड पर लिखा कोड ठीक वैसा ही लिखें।', 401, 'INVALID_RECOVERY');
+      var rc2 = setPreviewPassword(ruser, rpin2);
+      ruser.tokens = {};
+      return finishAuth(ruser, { recovered: true, recoveryCode: rc2 });
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'username-hint') {
+      var husers = deviceConflictUsers(deviceKey, fpKey).filter(function (u) { return u.username; });
+      if (!husers.length) return { ok: false, hint: null, message: 'इस फ़ोन से कोई खाता जुड़ा नहीं मिला। लॉगिन कार्ड देखें या नीचे appeal भेजें।' };
+      husers.sort(function (a, b) { return (b.lastLoginAt || 0) - (a.lastLoginAt || 0); });
+      return { ok: true, count: husers.length, hints: husers.slice(0, 3).map(function (u) { return { usernameMasked: '@' + maskUsername(u.username), name: u.name }; }), message: 'क्या इनमें से कोई आपका username है? पूरा username लॉगिन कार्ड पर लिखा होता है।' };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'apply') {
+      var akind = body.kind === 'device-second-account' ? 'device-second-account' : 'forgot-username';
+      var aname = validName(body);
+      var auname = validUsername(body);
+      var apin = validPin(body.password, auname);
+      var areason = clean(body.reason, 300);
+      if (areason.length < 8) throw err('कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर) — जैसे "पुराना username भूल गया, फ़ोन यही है"।');
+      if (usernameTaken(auname)) throw err('यह username (@' + auname + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', 409, 'USERNAME_TAKEN', { suggestions: usernameSuggestions(auname) });
+      syncApplications();
+      var dupApp = null;
+      db.accountApplications.forEach(function (a) { if (a && a.status === 'pending' && a.device === deviceKey && a.desiredUsername === auname) dupApp = a; });
+      if (dupApp) throw err('इसी username का आपका आवेदन पहले से जाँच में है। आवेदन नंबर: ' + dupApp.id, 409, 'APPLICATION_PENDING', { applicationId: dupApp.id });
+      var areceipt = rid(14);
+      var arecovery = makeRecovery();
+      var newApp = {
+        id: 'APP-' + rid(4).toUpperCase(), kind: akind, name: aname, desiredUsername: auname,
+        pwHash: previewHash(apin), recoveryHash: previewHash(arecovery.replace(/[^A-Z0-9]/g, '')),
+        receiptHash: hashPreview(areceipt, 'receipt'), reason: areason, device: deviceKey, fp: fpKey || null,
+        conflictUserIds: deviceConflictUsers(deviceKey, fpKey).map(function (u) { return u.id; }),
+        status: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 7 * 864e5,
+        decidedAt: null, decisionNote: '', resultingUserId: null, replacedUserId: null
+      };
+      db.accountApplications.push(newApp); save();
+      return { ok: true, applicationId: newApp.id, receipt: areceipt, recoveryCode: arecovery, status: 'pending', message: 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।' };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'application-status') {
+      syncApplications();
+      var appId = clean(body.applicationId, 24).toUpperCase();
+      var appObj = null;
+      if (appId) db.accountApplications.forEach(function (a) { if (a && a.id === appId) appObj = a; });
+      if (!appObj && deviceKey) {
+        var mineApps = db.accountApplications.filter(function (a) { return a && a.device === deviceKey; }).sort(function (a, b) { return b.createdAt - a.createdAt; });
+        appObj = mineApps[0] || null;
+      }
+      if (!appObj) throw err('इस फ़ोन पर कोई आवेदन नहीं मिला। आवेदन नंबर ठीक से लिखें।', 404);
+      var receipt = clean(body.receipt, 60);
+      var receiptOk = receipt && appObj.receiptHash === hashPreview(receipt, 'receipt');
+      if (!receiptOk && appObj.device !== deviceKey) throw err('यह आवेदन इस फ़ोन/रसीद से नहीं खुल सकता।', 403);
+      return {
+        ok: true, applicationId: appObj.id, status: appObj.status, username: appObj.desiredUsername, name: appObj.name,
+        createdAt: appObj.createdAt, decidedAt: appObj.decidedAt || null, decisionNote: appObj.decisionNote || '',
+        message: appObj.status === 'approved' ? 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।'
+          : appObj.status === 'rejected' ? 'क्षमा करें, यह आवेदन मंज़ूर नहीं हुआ। कारण ऊपर दिया है।'
+          : appObj.status === 'expired' ? 'यह आवेदन 7 दिन पूरे होने पर समाप्त हो गया — चाहें तो फिर से आवेदन भेजें।'
+          : 'आपका आवेदन Team Janmat की जाँच में है। मंज़ूरी मिलते ही यहीं पता चल जाएगा।'
+      };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'password') {
+      if (!viewer) throw err('लॉगिन नहीं है।', 401, 'LOGIN_REQUIRED');
+      if (!viewer.pwHash || !checkPreview(String(body.oldPassword || ''), viewer.pwHash)) throw err('मौजूदा PIN सही नहीं है।', 401, 'WRONG_PASSWORD');
+      var npin = validPin(body.newPassword, viewer.username);
+      viewer.pwHash = previewHash(npin);
+      var oldTok = token && viewer.tokens[token];
+      viewer.tokens = oldTok ? {} : {};
+      if (oldTok) viewer.tokens[token] = oldTok;
+      save();
+      return { ok: true, message: 'PIN बदल गया।' };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'auto') {
+      var oid = db.deviceOwner && db.deviceOwner[deviceKey];
+      if (!oid && fpKey && db.fpOwner) oid = db.fpOwner[fpKey];
+      var ou = oid ? findUserById(oid) : null;
+      return { ok: false, hint: ou && !ou.deletedAt ? { name: ou.name, usernameMasked: ou.username ? '@' + maskUsername(ou.username) : null, via: db.deviceOwner[deviceKey] ? 'device' : 'fingerprint' } : null, passwordRequired: true };
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'rebind') {
+      throw err('अब लॉगिन username + PIN से होता है — फ़ोन से नाम छुड़ाने की ज़रूरत नहीं। अपने username से लॉगिन करें।', 410, 'REBIND_RETIRED');
     }
 
     if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'logout') {
@@ -343,7 +736,7 @@
 
     /* elections create */
     if (method === 'POST' && parts[1] === 'elections' && parts.length === 2) {
-      if (!viewer) throw err('चुनाव बनाने के लिए पहले नाम से लॉगिन करें।', 401, 'LOGIN_REQUIRED');
+      if (!viewer) throw err('चुनाव बनाने के लिए पहले username से लॉगिन करें।', 401, 'LOGIN_REQUIRED');
       var q = quotaFor(viewer);
       if (q.remaining <= 0) {
         throw err('आप आज की सीमा (' + q.limit + ' चुनाव प्रतिदिन) पूरी कर चुके हैं। कल फिर कोशिश करें।', 403, 'DAILY_LIMIT', { quota: q });
@@ -376,23 +769,38 @@
     var election = parts[1] === 'elections' && parts[2] ? findElection(parts[2]) : null;
     if (parts[1] === 'elections' && parts[2] && !election) throw err('चुनाव नहीं मिला।', 404);
 
-    if (method === 'GET' && election && parts.length === 3) return full(election, viewer);
+    if (method === 'GET' && election && parts.length === 3) {
+      var whoGet = viewer || { id: 'g:' + deviceKey, name: 'मेहमान मतदाता', guest: true };
+      return full(election, whoGet);
+    }
 
     if (method === 'POST' && election && parts[3] === 'vote') {
-      if (!viewer) throw err('वोट देने के लिए पहले अपना नाम लिखकर लॉगिन करें।', 401, 'LOGIN_REQUIRED');
       if (election.closed) throw err('यह चुनाव समाप्त हो चुका है, अब वोट नहीं डाला जा सकता।', 403);
       var candidateId = clean(body.candidateId, 40);
       var cand = null;
       election.candidates.forEach(function (c) { if (c.id === candidateId) cand = c; });
       if (!cand) throw err('उम्मीदवार नहीं मिला।');
-      if (election.votes[viewer.id]) throw err('आप इस चुनाव में पहले ही वोट कर चुके हैं।', 409, 'ALREADY_VOTED', { election: full(election, viewer) });
-      if (election.devices[deviceKey]) {
-        throw err('इस फ़ोन/डिवाइस से इस चुनाव में वोट दिया जा चुका है। एक डिवाइस से सिर्फ़ एक ही वोट मान्य है।', 409, 'DEVICE_VOTED', { election: full(election, viewer) });
+      var voterId = viewer ? viewer.id : 'g:' + deviceKey;
+      var voterObj = viewer || { id: voterId, name: 'मेहमान मतदाता', guest: true };
+      if (!election.votes) election.votes = {};
+      if (!election.devices) election.devices = {};
+      if (election.votes[voterId]) throw err('आप इस चुनाव में पहले ही वोट कर चुके हैं।', 409, 'ALREADY_VOTED', { election: full(election, voterObj) });
+      var fpAlready = !!(fpKey && election.fpVotes && election.fpVotes[fpKey] && election.fpVotes[fpKey].length);
+      if (fpAlready && body.overrideSamePhone !== true) {
+        throw err('इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।', 409, 'SAME_PHONE_VOTED', { allowOverride: true, election: full(election, voterObj) });
       }
-      election.votes[viewer.id] = { c: cand.id, at: Date.now(), device: deviceKey };
-      election.devices[deviceKey] = { userId: viewer.id, at: Date.now() };
+      if (election.devices[deviceKey]) {
+        throw err('इस फ़ोन/डिवाइस से इस चुनाव में वोट दिया जा चुका है। एक डिवाइस से सिर्फ़ एक ही वोट मान्य है।', 409, 'DEVICE_VOTED', { election: full(election, voterObj) });
+      }
+      election.votes[voterId] = { c: cand.id, at: Date.now(), device: deviceKey, guest: !viewer, fp: fpKey || null, samePhoneOverride: !!(fpAlready && body.overrideSamePhone === true) };
+      election.devices[deviceKey] = { userId: voterId, at: Date.now() };
+      if (fpKey) {
+        if (!election.fpVotes) election.fpVotes = {};
+        if (!election.fpVotes[fpKey]) election.fpVotes[fpKey] = [];
+        if (election.fpVotes[fpKey].indexOf(voterId) === -1) election.fpVotes[fpKey].push(voterId);
+      }
       save();
-      return { ok: true, votedFor: { id: cand.id, name: cand.name, symbol: cand.symbol }, election: full(election, viewer) };
+      return { ok: true, votedFor: { id: cand.id, name: cand.name, symbol: cand.symbol }, election: full(election, voterObj) };
     }
 
     if (method === 'POST' && election && (parts[3] === 'close' || parts[3] === 'reopen')) {
@@ -450,7 +858,8 @@
         var created = db.elections.filter(function (e) { return e.creatorId === u.id; });
         var voted = db.elections.filter(function (e) { return e.votes[u.id]; });
         return {
-          id: u.id, name: u.name, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, isDemo: !!u.isDemo,
+          id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active', hasPassword: !!u.pwHash,
+          createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, isDemo: !!u.isDemo,
           electionsCreated: created.length, votesCast: voted.length,
           deviceCount: Object.keys(u.devices || {}).length,
           electionCodes: created.map(function (e) { return e.code; })
@@ -463,7 +872,7 @@
         return {
           code: e.code, title: e.title, type: e.type, gram: e.gram, district: e.district, state: e.state,
           createdAt: e.createdAt, closed: !!e.closed, closedAt: e.closedAt || null, isDemo: !!e.isDemo,
-          creatorId: e.creatorId, creatorName: cr ? cr.name : 'अज्ञात', creatorIsDemo: cr ? !!cr.isDemo : false,
+          creatorId: e.creatorId, creatorName: cr ? cr.name : 'अज्ञात', creatorUsername: cr ? (cr.username || null) : null, creatorIsDemo: cr ? !!cr.isDemo : false,
           totalVotes: t.totalVotes, candidateCount: e.candidates.length,
           deviceCount: Object.keys(e.devices || {}).length,
           leading: t.candidates[0] || null, winner: e.closed ? (t.candidates[0] || null) : null
@@ -478,7 +887,14 @@
           var c = null;
           e.candidates.forEach(function (x) { if (x.id === (v && v.c)) c = x; });
           voteRows.push({
-            at: (v && v.at) || 0, userId: uid, userName: u ? u.name : 'अज्ञात उपयोगकर्ता', userIsDemo: u ? !!u.isDemo : true,
+            at: (v && v.at) || 0, userId: uid,
+            userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).indexOf('g:') === 0 ? 'मेहमान मतदाता' : 'अज्ञात उपयोगकर्ता')),
+            userUsername: u ? (u.username || null) : null,
+            linkedName: (v && v.linkedName) || null,
+            linkedUsername: (v && v.linkedUsername) || (u && v && v.sourceGuest ? (u.username || null) : null),
+            voteSource: (v && v.sourceGuest) ? 'guest-first' : (String(uid).indexOf('g:') === 0 ? 'guest' : 'account'),
+            adopted: !!(v && v.adoptedAt),
+            userIsDemo: u ? !!u.isDemo : false,
             electionCode: e.code, electionTitle: e.title, electionDemo: !!e.isDemo,
             candidateId: c ? c.id : null, candidateName: c ? c.name : '—',
             candidateSymbol: c ? c.symbol || 'diya' : 'diya', candidateParty: c ? c.party || '' : '',
@@ -498,6 +914,14 @@
           todayVotes: voteRows.filter(function (v) { return istDay(v.at) === today; }).length,
           storage: 'preview', dailyLimit: DAILY_LIMIT, serverTime: Date.now()
         },
+        usage: {
+          monthKey: 'preview', commands: 0, commandQuota: 500000,
+          votesThisMonth: voteRows.length, electionsThisMonth: db.elections.length,
+          dbBytes: JSON.stringify(db).length, dbBytesQuota: 250 * 1024 * 1024,
+          openComplaints: 0,
+          pendingApplications: (db.accountApplications || []).filter(function (a) { return a && a.status === 'pending'; }).length,
+          accountsWithoutUsername: db.users.filter(function (u) { return u && !u.username && !u.isDemo && isActiveUser(u); }).length
+        },
         users: users, elections: elections, votes: voteRows.slice(0, 1000)
       };
     }
@@ -512,15 +936,104 @@
         var c = null;
         e2.candidates.forEach(function (x) { if (x.id === (v && v.c)) c = x; });
         return {
-          at: (v && v.at) || 0, userName: u ? u.name : 'अज्ञात', userIsDemo: u ? !!u.isDemo : true,
+          at: (v && v.at) || 0,
+          userName: u ? u.name : (v && v.linkedName ? v.linkedName : (String(uid).indexOf('g:') === 0 ? 'मेहमान मतदाता' : 'अज्ञात')),
+          userUsername: u ? (u.username || null) : null,
+          linkedName: (v && v.linkedName) || null,
+          linkedUsername: (v && v.linkedUsername) || (u && v && v.sourceGuest ? (u.username || null) : null),
+          voteSource: (v && v.sourceGuest) ? 'guest-first' : (String(uid).indexOf('g:') === 0 ? 'guest' : 'account'),
+          adopted: !!(v && v.adoptedAt),
+          userIsDemo: u ? !!u.isDemo : false,
           candidateName: c ? c.name : '—', candidateSymbol: c ? c.symbol || 'diya' : 'diya',
           deviceShort: v && v.device ? String(v.device).slice(0, 10) : ''
         };
       }).sort(function (a, b) { return b.at - a.at; });
       var outE = full(e2, null);
       outE.creatorName = creator ? creator.name : 'अज्ञात';
+      outE.creatorUsername = creator ? (creator.username || null) : null;
       outE.creatorId = e2.creatorId;
       return { election: outE, votes: rows };
+    }
+
+    if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'applications' && parts.length === 3) {
+      syncApplications();
+      var rank = { pending: 0, approved: 1, rejected: 2, expired: 3 };
+      var applications = db.accountApplications.slice().sort(function (a, b) {
+        return ((rank[a.status] == null ? 9 : rank[a.status]) - (rank[b.status] == null ? 9 : rank[b.status])) || (b.createdAt - a.createdAt);
+      }).slice(0, 300).map(function (a) {
+        return {
+          id: a.id, kind: a.kind, name: a.name, desiredUsername: a.desiredUsername, reason: a.reason,
+          status: a.status, createdAt: a.createdAt, expiresAt: a.expiresAt || null, decidedAt: a.decidedAt || null,
+          decisionNote: a.decisionNote || '', resultingUserId: a.resultingUserId || null, replacedUserId: a.replacedUserId || null,
+          conflicts: (a.conflictUserIds || []).map(function (id) { return findUserById(id); }).filter(Boolean).map(function (u) {
+            return {
+              id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active',
+              hasPassword: !!u.pwHash, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null,
+              electionsCreated: db.elections.filter(function (e) { return e.creatorId === u.id; }).length,
+              votesCast: db.elections.filter(function (e) { return e.votes && e.votes[u.id]; }).length
+            };
+          })
+        };
+      });
+      return {
+        applications: applications,
+        stats: {
+          total: applications.length,
+          pending: applications.filter(function (a) { return a.status === 'pending'; }).length,
+          approved: applications.filter(function (a) { return a.status === 'approved'; }).length,
+          rejected: applications.filter(function (a) { return a.status === 'rejected'; }).length
+        }
+      };
+    }
+
+    if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'applications' && parts[3] && (parts[4] === 'approve' || parts[4] === 'reject')) {
+      syncApplications();
+      var dapp = null;
+      db.accountApplications.forEach(function (a) { if (a && a.id === String(parts[3]).toUpperCase()) dapp = a; });
+      if (!dapp) throw err('आवेदन नहीं मिला।', 404);
+      if (dapp.status !== 'pending') throw err('इस आवेदन पर पहले ही निर्णय हो चुका है (' + dapp.status + ')।', 409);
+      var dnote = clean(body.note, 300);
+      if (parts[4] === 'reject') {
+        dapp.status = 'rejected'; dapp.decidedAt = Date.now();
+        dapp.decisionNote = dnote || 'Team Janmat की जाँच में यह आवेदन मंज़ूर नहीं हो सका।';
+        dapp.pwHash = null; dapp.recoveryHash = null; save();
+        return { ok: true, applicationId: dapp.id, status: 'rejected' };
+      }
+      var replaceId = clean(body.replaceUserId, 40);
+      var dmode = clean(body.mode, 24);
+      var dconflicts = (dapp.conflictUserIds || []).map(function (id) { return findUserById(id); }).filter(isActiveUser);
+      var target = replaceId ? findUserById(replaceId) : null;
+      if (replaceId && !target) throw err('बदला जाने वाला पुराना खाता नहीं मिला।');
+      if (!target && dconflicts.length && dmode !== 'additional') throw err('इस फ़ोन पर पुराना खाता मौजूद है। कृपया चुनें: पुराना खाता बदलें (उसका डेटा नए username में आएगा) या अलग दूसरा खाता बनाएँ।', 400, 'REPLACE_CHOICE_REQUIRED');
+      var owner = findUserByUsername(dapp.desiredUsername);
+      if (owner && target && owner.id === target.id) {
+        owner.pwHash = dapp.pwHash; owner.recoveryHash = dapp.recoveryHash; owner.name = dapp.name;
+        owner.accountStatus = 'active'; owner.tokens = {};
+        if (!owner.devices) owner.devices = {};
+        owner.devices[dapp.device] = Date.now(); db.deviceOwner[dapp.device] = owner.id;
+        if (dapp.fp) db.fpOwner[dapp.fp] = owner.id;
+        recordDeviceAccount(owner, dapp.device, dapp.fp || null);
+        var adoptedSame = adoptGuestVotes(owner, dapp.device);
+        dapp.status = 'approved'; dapp.decidedAt = Date.now(); dapp.decisionNote = dnote;
+        dapp.resultingUserId = owner.id; dapp.replacedUserId = owner.id; dapp.pwHash = null; dapp.recoveryHash = null; save();
+        return { ok: true, applicationId: dapp.id, status: 'approved', resultingUserId: owner.id, replacedUserId: owner.id, adoptedVotes: adoptedSame };
+      }
+      if (owner) throw err('माँगा गया username (@' + dapp.desiredUsername + ') इस बीच किसी खाते में लग चुका है — आवेदन अस्वीकार करके उपयोगकर्ता से नया username माँगें।', 409);
+      var nu = {
+        id: rid(8), name: dapp.name, nameLower: nameKey(dapp.name), username: dapp.desiredUsername,
+        accountStatus: 'active', createdAt: Date.now(), appliedAt: dapp.createdAt, approvedFromApplication: dapp.id,
+        lastLoginAt: null, isDemo: false, devices: {}, tokens: {}, pwHash: dapp.pwHash, recoveryHash: dapp.recoveryHash
+      };
+      db.users.push(nu);
+      nu.devices[dapp.device] = Date.now(); db.deviceOwner[dapp.device] = nu.id;
+      if (dapp.fp) db.fpOwner[dapp.fp] = nu.id;
+      recordDeviceAccount(nu, dapp.device, dapp.fp || null);
+      var dadopted = adoptGuestVotes(nu, dapp.device);
+      if (target) mergeAccountInto(target, nu);
+      dapp.status = 'approved'; dapp.decidedAt = Date.now(); dapp.decisionNote = dnote;
+      dapp.resultingUserId = nu.id; dapp.replacedUserId = target ? target.id : null;
+      dapp.pwHash = null; dapp.recoveryHash = null; save();
+      return { ok: true, applicationId: dapp.id, status: 'approved', resultingUserId: nu.id, replacedUserId: dapp.replacedUserId, adoptedVotes: dadopted, username: nu.username };
     }
 
     if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'demo' && parts[3] === 'purge') {

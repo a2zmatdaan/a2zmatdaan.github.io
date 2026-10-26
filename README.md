@@ -1,4 +1,11 @@
-# 🗳️ जनमत (Janmat) — ऑनलाइन मतदान मंच v3
+# 🗳️ जनमत (Janmat) — ऑनलाइन मतदान मंच v8
+
+> ## 🆔 v8 — अनोखा Username + गुप्त PIN
+>
+> अब दिखने वाला असली नाम कई लोगों का एक जैसा हो सकता है, लेकिन login पहचान **पूरी site पर अनोखा username + 6–10 अंकों का PIN** है। लिया हुआ username साफ़ “पहले से उपयोग में है” कहेगा। Guest वोट चालू है; उसी फ़ोन से बाद में signup करने पर Guest वोट खाते से जुड़ेगा और Developer Panel में “पहले Guest, बाद में signup” दिखेगा। एक फ़ोन से एक सीधा खाता बनेगा; दूसरा खाता या भूला username Team Janmat के manual आवेदन से मिलेगा।
+>
+> **पूरी जानकारी और deploy तरीका: `V8-USERNAME-GUIDE.md` देखें।** इस README के पुराने ऐतिहासिक हिस्सों में जहाँ “सिर्फ़ नाम से लॉगिन” जैसी बात दिखे, वह v8 में बदल चुकी है।
+
 
 > ## ⚡ v3 — GitHub Pages वाला 404 ठीक हो गया (24 Oct 2026)
 >
@@ -131,8 +138,8 @@ DEV_PASSWORD="MeraNayaPassword" node server.js
 
 | # | फ़ीचर | कैसे काम करता है |
 |---|---|---|
-| 1 | **नाम से लॉगिन** | कोई पासवर्ड/OTP नहीं — सिर्फ़ नाम। वही नाम दोबारा लिखने पर वही खाता खुलता है। |
-| 2 | **1 मोबाइल = 1 वोट** | डिवाइस फिंगरप्रिंट (canvas + hardware + UA) + server-side IP/UA hash। एक डिवाइस से दूसरा नाम लेकर भी दोबारा वोट नहीं होता। |
+| 1 | **Username + PIN लॉगिन** | असली नाम कई लोगों का एक जैसा हो सकता है; login के लिए पूरी site पर अनोखा username और 6–10 अंकों का PIN चाहिए। कोई mobile/Gmail/OTP नहीं। |
+| 2 | **जुड़ी मोबाइल पहचान = 1 गिना वोट** | डिवाइस फिंगरप्रिंट + server संकेत। Guest या खाते से पड़ा पहला वोट गिना जाता है; उसी जुड़ी पहचान से दूसरा गिना वोट रुकता है और बाद के signup से Guest वोट खाते में जुड़ता है। |
 | 3 | **1 यूज़र = रोज़ 2 चुनाव** | IST कैलेंडर दिन के हिसाब से। तीसरा चुनाव बनाने पर साफ़ संदेश + रीसेट का समय। |
 | 4 | **सिर्फ़ आप (डेवलपर) सब देख सकते हैं** | `/#/developer` → पासवर्ड `<Render Dashboard में सेट करें>` → हर यूज़र, उसके बनाए चुनाव, और **किसने किसको वोट दिया** — सब। |
 | 5 | **चुनाव बनाने वाला भी मतदाता नहीं देख सकता** | Public API में creator/voter की कोई जानकारी नहीं जाती (test की गई है)। आयोजक को सिर्फ़ गिनती + "बंद करें" बटन दिखता है। |
@@ -205,7 +212,7 @@ node build.js     # फिर से public/index.html बनेगा
 1. [github.com/new](https://github.com/new) पर जाएँ।
 2. **Repository name** में लिखें: `janmat`
    *(दूसरे विकल्प: `janmat-online-voting`, `janmat-voting-app`, `mera-janmat`)*
-3. Description: `जनमत — नाम से लॉगिन वाला ऑनलाइन सामुदायिक मतदान मंच`
+3. Description: `जनमत — अनोखा username + PIN वाला ऑनलाइन सामुदायिक मतदान मंच`
 4. **Public** चुनें → **Create repository**।
 
 ### B. कोड चढ़ाएँ (तीन तरीक़े — कोई एक)
@@ -255,12 +262,18 @@ git push -u origin main
 
 | Method | Endpoint | काम |
 |---|---|---|
-| `POST` | `/api/auth/login` | `{ name, deviceId }` → token |
+| `GET` | `/api/auth/username/:username` | username उपलब्ध है या पहले से उपयोग में |
+| `POST` | `/api/auth/register` | `{ name, username, password(PIN), deviceId }` → token |
+| `POST` | `/api/auth/login` | `{ username, password(PIN), deviceId }` → token |
+| `POST` | `/api/auth/migrate` / `/api/auth/set-username` | पुराने खाते को username+PIN में लाना |
+| `POST` | `/api/auth/recover` | username + Recovery Code से नया PIN |
+| `POST` | `/api/auth/username-hint` | उसी फ़ोन पर छिपा username संकेत |
+| `POST` | `/api/auth/apply` / `/api/auth/application-status` | Team Janmat आवेदन और स्थिति |
 | `GET` | `/api/auth/me` | अपना प्रोफ़ाइल + कोटा |
 | `GET` | `/api/elections?q=` | सार्वजनिक सूची (कोई पहचान नहीं) |
 | `POST` | `/api/elections` | चुनाव बनाएँ *(login ज़रूरी, रोज़ 2)* |
 | `GET` | `/api/elections/:code` | चुनाव + लाइव परिणाम |
-| `POST` | `/api/elections/:code/vote` | वोट *(login + डिवाइस लॉक)* |
+| `POST` | `/api/elections/:code/vote` | वोट *(login या Guest; device लॉक)* |
 | `POST` | `/api/elections/:code/close` / `reopen` | आयोजक या डेवलपर |
 | `GET` | `/api/me/overview` | मेरे चुनाव + मेरे वोट |
 | `POST` | `/api/dev/login` | `{ password }` → devToken |
@@ -280,8 +293,8 @@ Developer endpoints के लिए header: `x-dev-token: <devToken>`
 - डेवलपर पासवर्ड कभी फ्रंटएंड में नहीं भेजा जाता; सर्वर पर timing-safe तरीक़े से जाँचा जाता है।
 - डेवलपर लॉगिन: 10 मिनट में 8 कोशिशें; सत्र 12 घंटे।
 - Public API से creator/voter की पहचान हमेशा छिपी रहती है।
-- नाम आरक्षित सूची (`admin`, `developer` आदि) ब्लॉक है; script/HTML अक्षर नाम में नहीं चलते।
-- **ईमानदारी से:** नाम-आधारित लॉगिन में कोई क्रिप्टोग्राफ़िक पहचान नहीं होती — कोई भी किसी और का नाम लिख सकता है। इसलिए यह समुदाय के भरोसे वाले चुनावों के लिए है। डिवाइस-लॉक से एक फ़ोन से दोबारा वोट रुकता है, लेकिन 100% धोखाधड़ी-रहित गारंटी किसी भी बिना-KYC सिस्टम में संभव नहीं।
+- Username की आरक्षित सूची (`admin`, `developer` आदि) ब्लॉक है; PIN, Recovery Code और session token server पर hash रूप में रहते हैं।
+- **ईमानदारी से:** बिना mobile/email/सरकारी पहचान के username+PIN खाते की रक्षा करता है, लेकिन किसी मनुष्य की 100% पहचान नहीं बन सकता। Device/browser बदलने पर सीमा रहती है; यह सामुदायिक/मत-सर्वे मंच है, आधिकारिक चुनाव प्रणाली नहीं।
 
 ---
 
@@ -292,6 +305,9 @@ Developer endpoints के लिए header: `x-dev-token: <devToken>`
 ---
 
 ## 🧪 टेस्ट किए गए फ़्लो
+
+**v8 सत्यापन:** अलग local copies में मुख्य API परिदृश्य, पुराने data migration के 21 चेक, offline/preview के 17 चेक और असली page UI के 23 चेक पास हुए; username+PIN वाली CI smoke जाँच भी पूरी पास हुई। इनमें duplicate username रोक, PIN recovery, Guest→signup link, आवेदन approval और Developer Panel शामिल हैं।
+
 
 **v2.1 में 64 चेक, सब पास** (Chromium में असली ब्राउज़र टेस्ट):
 

@@ -1736,7 +1736,6 @@ function emptyLiveHTML(opts) {
       असली साझा मतदान (एक लिंक/खोज से सबको दिखे) के लिए साइट को सर्वर से जोड़ना ज़रूरी है।</p>
       <div class="empty-actions">
         <a class="btn btn-primary" href="#/how">कैसे पूरा चालू करें</a>
-        <a class="btn btn-ghost" href="#/developer">डेवलपर पैनल</a>
       </div>
     </div>`;
   }
@@ -3602,7 +3601,7 @@ function renderLogin() {
 }
 
 /* =====================================================================
-   SETTINGS  (profile + my elections + my votes + developer entry)
+   SETTINGS  (profile + my elections + my votes)
    ===================================================================== */
 
 const SETTINGS_ROWS = [
@@ -3614,7 +3613,6 @@ const SETTINGS_ROWS = [
   { id: 'privacy',    icon: 'shield',  title: 'गोपनीयता नीति',        sub: 'आपका डेटा क्या जाता है, कहाँ रहता है', href: '#/privacy' },
   { id: 'terms',      icon: 'doc',     title: 'नियम व शर्तें',         sub: 'उपयोग की शर्तें और ज़िम्मेदारियाँ', href: '#/terms' },
   { id: 'disclaimer', icon: 'warn',    title: 'डिस्क्लेमर',            sub: 'यह सरकारी/निर्वाचन-आयोग मंच नहीं है', href: '#/disclaimer' },
-  { id: 'developer',  icon: 'key',     title: 'डेवलपर एक्सेस',         sub: 'सिर्फ़ आपके लिए — पासवर्ड से खुलेगा', href: '#/developer' },
   { id: 'account',    icon: 'lock',    title: 'खाता और सुरक्षा',       sub: 'PIN बदलना, लॉगआउट, खाता हटाना', href: '#/settings/account' },
 ];
 
@@ -3625,12 +3623,11 @@ function rowIcon(name, size) {
 }
 
 function settingsRowHTML(r) {
-  const badge = r.id === 'developer' ? '<span class="row-tag">तेज़</span>' : '';
   return `
   <a class="set-row" href="${r.href}">
     <span class="set-row-ico">${rowIcon(r.icon, 20)}</span>
     <span class="set-row-text">
-      <b>${r.title}${badge}</b>
+      <b>${r.title}</b>
       <span>${r.sub}</span>
     </span>
     <svg class="set-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -3647,7 +3644,7 @@ async function renderSettings(tab) {
     <section class="section"><div class="wrap wrap-narrow">
       <div class="kicker">सेटिंग्स</div>
       <h2 style="font-size:clamp(24px,3.4vw,34px);letter-spacing:-.025em">सेटिंग्स और मेरा खाता</h2>
-      <p class="muted" style="margin:9px 0 22px">अपने चुनाव, अपने वोट, डार्क मोड और डेवलपर एक्सेस देखने के लिए लॉगिन करें।</p>
+      <p class="muted" style="margin:9px 0 22px">अपने चुनाव, अपने वोट और डार्क मोड देखने के लिए लॉगिन करें।</p>
       ${loginCardHTML({ title: 'लॉगिन करें' })}
       <div class="set-list" style="margin-top:18px">
         ${settingsRowHTML(SETTINGS_ROWS[3])}${settingsRowHTML(SETTINGS_ROWS[4])}${settingsRowHTML(SETTINGS_ROWS[5])}${settingsRowHTML(SETTINGS_ROWS[7])}
@@ -4041,6 +4038,50 @@ function settingsVotesHTML(data) {
 let devData = null;
 let devTab = 'active';
 
+/* सार्वजनिक UI में इस प्रवेश का कोई बटन/लिंक नहीं रखा गया है। */
+const OWNER_GATE_KEY = 'jm_owner_gate_v1';
+function ownerGateOn() {
+  try { return sessionStorage.getItem(OWNER_GATE_KEY) === '1'; }
+  catch (_) { return !!window.__jmOwnerGate; }
+}
+function ownerGateEnable() {
+  window.__jmOwnerGate = true;
+  try { sessionStorage.setItem(OWNER_GATE_KEY, '1'); } catch (_) {}
+}
+function ownerGateClear() {
+  window.__jmOwnerGate = false;
+  try { sessionStorage.removeItem(OWNER_GATE_KEY); } catch (_) {}
+}
+function ownerGateAllowed() {
+  return !!state.devToken || ownerGateOn();
+}
+function ownerGateHome() {
+  if (typeof stopDevLive === 'function') { try { stopDevLive(); } catch (_) {} }
+  try { history.replaceState(null, '', pageBase() + '#/'); }
+  catch (_) { try { location.hash = '#/'; } catch (__) {} }
+  try { window.scrollTo({ top: 0 }); } catch (_) {}
+  return safeRender('home', () => renderHome());
+}
+function bindBrandOwnerGate() {
+  const brand = document.querySelector('.brand');
+  if (!brand || brand.__ownerGateBound) return;
+  brand.__ownerGateBound = true;
+  let taps = [];
+  brand.addEventListener('click', (ev) => {
+    const now = Date.now();
+    taps = taps.filter((t) => now - t < 2600);
+    taps.push(now);
+    if (taps.length >= 5) {
+      taps = [];
+      ev.preventDefault();
+      ev.stopPropagation();
+      ownerGateEnable();
+      if (String(location.hash || '').startsWith('#/developer')) route();
+      else location.hash = '#/developer';
+    }
+  });
+}
+
 async function renderDeveloper() {
   setActiveNav('');
   clearPoll();
@@ -4118,6 +4159,7 @@ async function renderDeveloper() {
     try { await api('/api/dev/logout', { method: 'POST' }); } catch (_) {}
     state.devToken = null;
     store.del('jm_dev_token');
+    ownerGateClear();
     devData = null;
     stopDevLive();
     /* लॉगआउट के बाद भी वापस पैनल पर न आए — इस entry को होम से बदल दो */
@@ -5248,6 +5290,7 @@ function renderDevLogin() {
       const res = await api('/api/dev/login', { method: 'POST', body: { password: input.value } });
       state.devToken = res.devToken;
       store.set('jm_dev_token', res.devToken);
+      ownerGateEnable();
       devTab = 'active';   /* खुलते ही "चालू चुनाव" — हर चुनाव का अलग कार्ड */
       toast('डेवलपर एक्सेस खुल गया', 'ok');
       renderDeveloper();
@@ -5597,7 +5640,7 @@ function renderGrievance() {
           ${ICON.shield}
           <div>
             <b>Grievance Officer:</b> जनमत का संचालक (डेवलपर)।<br>
-            <b>संपर्क:</b> नीचे का फ़ॉर्म (सबसे तेज़)${GRIEVANCE_EMAIL ? ' · ईमेल: <a class="link" href="mailto:' + esc(GRIEVANCE_EMAIL) + '?subject=%E0%A4%9C%E0%A4%A8%E0%A4%AE%E0%A4%A4%20%E0%A4%B6%E0%A4%BF%E0%A4%95%E0%A4%BE%E0%A4%AF%E0%A4%A4">' + esc(GRIEVANCE_EMAIL) + '</a>' : ' · या <a href="#/developer">डेवलपर पेज</a> से'}
+            <b>संपर्क:</b> नीचे का फ़ॉर्म (सबसे तेज़)${GRIEVANCE_EMAIL ? ' · ईमेल: <a class="link" href="mailto:' + esc(GRIEVANCE_EMAIL) + '?subject=%E0%A4%9C%E0%A4%A8%E0%A4%AE%E0%A4%A4%20%E0%A4%B6%E0%A4%BF%E0%A4%95%E0%A4%BE%E0%A4%AF%E0%A4%A4">' + esc(GRIEVANCE_EMAIL) + '</a>' : ''}
             <br><span class="muted small">शिकायत में अपना नाम और संपर्क (फ़ोन/ईमेल) ज़रूर लिखें — जवाब देने के लिए ज़रूरी है।</span>
           </div>
         </div>
@@ -5714,8 +5757,11 @@ function route() {
   if (parts[0] === 'terms') return safeRender('terms', () => renderTerms());
   if (parts[0] === 'privacy') return safeRender('privacy', () => renderPrivacy());
   if (parts[0] === 'grievance') return safeRender('grievance', () => renderGrievance());
-  if (parts[0] === 'developer' && parts[1] === 'e' && parts[2]) return safeRender('developer', () => renderDevElection(parts[2].toUpperCase()));
-  if (parts[0] === 'developer') return safeRender('developer', () => renderDeveloper());
+  if (parts[0] === 'developer') {
+    if (!ownerGateAllowed()) return ownerGateHome();
+    if (parts[1] === 'e' && parts[2]) return safeRender('developer', () => renderDevElection(parts[2].toUpperCase()));
+    return safeRender('developer', () => renderDeveloper());
+  }
   if (parts[0] === 'settings') return safeRender('settings', () => renderSettings(parts[1] || 'main'));
   if (parts[0] === 'e' && parts[1]) return safeRender('election', () => renderElection(parts[1].toUpperCase()));
   return safeRender('home', () => renderHome());
@@ -5773,6 +5819,7 @@ function startGlobalTicker() {
 async function boot() {
   applyTheme();
   bindNavTheme();
+  bindBrandOwnerGate();
   if (window.matchMedia) {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const onSys = () => { if (getThemePref() === 'system') { applyTheme(); render(); } };

@@ -351,3 +351,11 @@ Login/नया PIN/recovery असफल होने पर form के अं
 नया endpoint: `POST /api/auth/recovery-code` (लॉगिन + मौजूदा PIN ज़रूरी) — नया कोड जारी करता है।
 
 Deploy के बाद जाँच: `https://a2zmatdaan-github-io.onrender.com/api/health` में `"app":"8.2.3-recovery-clarity"` दिखना चाहिए। GitHub Pages (index) और Render (server) दोनों पर नया version डालना ज़रूरी है।
+
+---
+
+## 18. v8.2.4 — सार्वजनिक UI सफ़ाई
+
+सार्वजनिक पेजों, Settings सूची और footer से अनावश्यक आंतरिक प्रवेश-बिंदु हटाकर आम उपयोगकर्ता का UI सरल रखा गया है। चुनाव, वोट, लॉगिन, recovery और खाता-वापसी के व्यवहार में कोई बदलाव नहीं है।
+
+Deploy के बाद health में `"app":"8.2.4-ui-cleanup"` दिखेगा।

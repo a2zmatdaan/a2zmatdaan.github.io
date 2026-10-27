@@ -589,7 +589,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.2.3-recovery-clarity';
+const APP_VERSION = '8.2.4-ui-cleanup';
 
 function publicElection(e, viewer) {
   const t = tally(e);

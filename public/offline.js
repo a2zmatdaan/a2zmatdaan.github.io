@@ -132,12 +132,27 @@
       tie: e.closed && leaders.length > 1
     };
   }
+  function publicResults(e) {
+    var t = tally(e);
+    if (e.closed) { t.resultsHidden = false; return t; }
+    return {
+      totalVotes: t.totalVotes, resultsHidden: true,
+      candidates: e.candidates.map(function (c) {
+        return {
+          id: c.id, name: c.name, party: c.party || '', symbol: c.symbol || 'diya',
+          votes: null, percent: null
+        };
+      }),
+      winnerIds: [], tie: false
+    };
+  }
   function summary(e) {
     var t = tally(e);
     return {
       code: e.code, title: e.title, type: e.type, gram: e.gram, district: e.district, state: e.state,
       createdAt: e.createdAt, closed: !!e.closed, closedAt: e.closedAt || null, demo: !!e.isDemo,
       totalVotes: t.totalVotes, candidateCount: e.candidates.length,
+      resultsHidden: !e.closed, resultsVisible: !!e.closed, resultsRevealAt: e.closed ? (e.closedAt || e.endsAt || null) : (e.endsAt || null),
       symbols: e.candidates.slice(0, 5).map(function (c) { return c.symbol || 'diya'; })
     };
   }
@@ -146,7 +161,7 @@
     var my = viewer && e.votes[viewer.id] ? e.votes[viewer.id].c : null;
     var out = summary(e);
     out.candidates = e.candidates.map(function (c) { return { id: c.id, name: c.name, party: c.party || '', symbol: c.symbol || 'diya' }; });
-    out.results = t;
+    out.results = publicResults(e);
     out.hasVoted = !!my;
     out.myVote = my;
     out.canManage = !!(viewer && e.creatorId === viewer.id);
@@ -853,7 +868,7 @@
         .map(function (e) {
           var s = summary(e);
           var tt = tally(e);
-          s.leading = tt.candidates[0] || null;
+          s.leading = e.closed ? (tt.candidates[0] || null) : null;
           s.canManage = true;
           return s;
         });
@@ -982,6 +997,10 @@
         };
       }).sort(function (a, b) { return b.at - a.at; });
       var outE = full(e2, null);
+      outE.results = tally(e2);
+      outE.results.resultsHidden = false;
+      outE.resultsHidden = false;
+      outE.resultsVisible = true;
       outE.creatorName = creator ? creator.name : 'अज्ञात';
       outE.creatorUsername = creator ? (creator.username || null) : null;
       outE.creatorId = e2.creatorId;

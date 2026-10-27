@@ -4,10 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>जनमत — अपना चुनाव, अपना फैसला</title>
-<meta name="description" content="जनमत पर अपने गाँव, कॉलोनी या संस्था का चुनाव बनाएँ और दुनिया में कहीं से भी ऑनलाइन वोट डालें। सरपंच, प्रधान, अध्यक्ष, MLA — स्थायी Username + गुप्त PIN से सुरक्षित लॉगिन, एक डिवाइस एक वोट, लाइव परिणाम।" />
+<meta name="description" content="जनमत पर अपने गाँव, कॉलोनी या संस्था का चुनाव बनाएँ और दुनिया में कहीं से भी ऑनलाइन वोट डालें। सरपंच, प्रधान, अध्यक्ष, MLA — स्थायी Username + गुप्त PIN से सुरक्षित लॉगिन, एक डिवाइस एक वोट, परिणाम मतदान समाप्त होने पर घोषित।" />
 <meta name="theme-color" content="#14183a" />
 <meta property="og:title" content="जनमत — ऑनलाइन मतदान" />
-<meta property="og:description" content="अपने गाँव का चुनाव, अब ऑनलाइन। स्थायी Username + गुप्त PIN से सुरक्षित लॉगिन, एक डिवाइस एक वोट, लाइव परिणाम।" />
+<meta property="og:description" content="अपने गाँव का चुनाव, अब ऑनलाइन। स्थायी Username + गुप्त PIN से सुरक्षित लॉगिन, एक डिवाइस एक वोट, परिणाम मतदान समाप्त होने पर घोषित।" />
 <meta property="og:type" content="website" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314183a'/%3E%3Cpath d='M14 34l10 10 24-26' stroke='%23ffb020' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
@@ -2247,12 +2247,27 @@ window.symbolName = function (id) {
       tie: e.closed && leaders.length > 1
     };
   }
+  function publicResults(e) {
+    var t = tally(e);
+    if (e.closed) { t.resultsHidden = false; return t; }
+    return {
+      totalVotes: t.totalVotes, resultsHidden: true,
+      candidates: e.candidates.map(function (c) {
+        return {
+          id: c.id, name: c.name, party: c.party || '', symbol: c.symbol || 'diya',
+          votes: null, percent: null
+        };
+      }),
+      winnerIds: [], tie: false
+    };
+  }
   function summary(e) {
     var t = tally(e);
     return {
       code: e.code, title: e.title, type: e.type, gram: e.gram, district: e.district, state: e.state,
       createdAt: e.createdAt, closed: !!e.closed, closedAt: e.closedAt || null, demo: !!e.isDemo,
       totalVotes: t.totalVotes, candidateCount: e.candidates.length,
+      resultsHidden: !e.closed, resultsVisible: !!e.closed, resultsRevealAt: e.closed ? (e.closedAt || e.endsAt || null) : (e.endsAt || null),
       symbols: e.candidates.slice(0, 5).map(function (c) { return c.symbol || 'diya'; })
     };
   }
@@ -2261,7 +2276,7 @@ window.symbolName = function (id) {
     var my = viewer && e.votes[viewer.id] ? e.votes[viewer.id].c : null;
     var out = summary(e);
     out.candidates = e.candidates.map(function (c) { return { id: c.id, name: c.name, party: c.party || '', symbol: c.symbol || 'diya' }; });
-    out.results = t;
+    out.results = publicResults(e);
     out.hasVoted = !!my;
     out.myVote = my;
     out.canManage = !!(viewer && e.creatorId === viewer.id);
@@ -2968,7 +2983,7 @@ window.symbolName = function (id) {
         .map(function (e) {
           var s = summary(e);
           var tt = tally(e);
-          s.leading = tt.candidates[0] || null;
+          s.leading = e.closed ? (tt.candidates[0] || null) : null;
           s.canManage = true;
           return s;
         });
@@ -3097,6 +3112,10 @@ window.symbolName = function (id) {
         };
       }).sort(function (a, b) { return b.at - a.at; });
       var outE = full(e2, null);
+      outE.results = tally(e2);
+      outE.results.resultsHidden = false;
+      outE.resultsHidden = false;
+      outE.resultsVisible = true;
       outE.creatorName = creator ? creator.name : 'अज्ञात';
       outE.creatorUsername = creator ? (creator.username || null) : null;
       outE.creatorId = e2.creatorId;
@@ -4789,8 +4808,8 @@ const HOW_SECTION = `
       </div>
       <div class="how-card">
         <div class="how-num">3</div>
-        <h3>लाइव परिणाम</h3>
-        <p>सभी को लाइव नतीजे, प्रतिशत और कौन आगे है — सब दिखता है। परिणाम स्थायी रूप से सुरक्षित रहते हैं।</p>
+        <h3>परिणाम मतदान के बाद</h3>
+        <p>मतदान के दौरान उम्मीदवारों की गिनती छिपी रहती है। समय खत्म होते ही अंतिम परिणाम सभी को दिखता है।</p>
       </div>
     </div>
   </div>
@@ -4804,7 +4823,7 @@ const HERO = `
       <h1>अपने गाँव का <span class="hl">चुनाव</span>,<br/>अब ऑनलाइन।</h1>
       <p class="hero-sub">
         सरपंच, प्रधान, मुखिया, अध्यक्ष या विधायक — अपना चुनाव बनाइए, गाँव, ज़िला और राज्य चुनिए,
-        और एक लिंक से दुनिया के किसी भी कोने से मतदान करवाइए। Username से लॉगिन, एक डिवाइस से एक वोट, हर नतीजा लाइव।
+        और एक लिंक से दुनिया के किसी भी कोने से मतदान करवाइए। Username से लॉगिन, एक डिवाइस से एक वोट, परिणाम मतदान समाप्त होने पर घोषित।
       </p>
       <div class="hero-actions">
         <a class="btn btn-saffron btn-lg" href="#/create">
@@ -4815,7 +4834,7 @@ const HERO = `
       </div>
       <div class="hero-trust">
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> Username + PIN लॉगिन</span>
-        <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> लाइव परिणाम</span>
+        <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> परिणाम मतदान के बाद</span>
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg> एक डिवाइस, एक वोट</span>
       </div>
     </div>
@@ -4849,29 +4868,38 @@ function heroStepsHTML() {
     ${step(1, 'Username + PIN से खाता बनाइए', 'मोबाइल/Gmail/OTP नहीं — username आपकी स्थायी ID और PIN उसकी चाबी है')}
     ${step(2, 'उम्मीदवार जोड़िए', 'चुनाव चिन्ह के साथ — 2 मिनट में तैयार')}
     ${step(3, 'लिंक भेजिए या खोजिए', 'जो भी जहाँ भी हो, वोट कर सकेगा')}
-    <div class="ballot-foot"><span>एक डिवाइस = एक वोट</span><span>नतीजे लाइव</span></div>
+    <div class="ballot-foot"><span>एक डिवाइस = एक वोट</span><span>परिणाम अंत में</span></div>
   </div>`;
 }
 
 function heroElectionHTML(e, detail) {
-  const rows = (detail && detail.candidates ? detail.candidates : [])
-    .slice()
-    .sort((a, b) => (b.votes || 0) - (a.votes || 0))
-    .slice(0, 3);
+  const closed = detail ? !!detail.closed : !!e.closed;
+  const hidden = !closed;
+  const resultRows = detail && detail.results && Array.isArray(detail.results.candidates)
+    ? detail.results.candidates : [];
+  const rank = new Map(resultRows.map((r, i) => [r.id, i]));
+  let rows = (detail && detail.candidates ? detail.candidates : []).slice();
+  if (!hidden && rank.size) {
+    rows.sort((x, y) => (rank.get(x.id) ?? 999) - (rank.get(y.id) ?? 999));
+  }
+  rows = rows.slice(0, 3);
+  const winnerIds = !hidden && detail && detail.results && Array.isArray(detail.results.winnerIds)
+    ? detail.results.winnerIds : [];
 
   const body = rows.length
-    ? rows.map((c, i) => {
-        const votes = (detail.results && (detail.results.candidates || []).find((r) => r.id === c.id)) || {};
-        const pct = votes.percent || 0;
+    ? rows.map((c) => {
+        const stat = resultRows.find((r) => r.id === c.id) || {};
+        const pct = hidden ? 0 : (Number(stat.percent) || 0);
+        const picked = winnerIds.includes(c.id);
         return `
-        <div class="ballot-row${i === 0 && detail.totalVotes ? ' picked' : ''}">
+        <div class="ballot-row${picked ? ' picked' : ''}">
           <div class="ballot-sym" data-sym="${esc(c.symbol || 'diya')}"></div>
           <div class="ballot-info">
             <div class="ballot-name">${esc(c.name)}</div>
             <div class="ballot-party">${esc(c.party || 'निर्दलीय')}</div>
-            <div class="ballot-bar"><i style="width:${pct}%"></i></div>
+            ${hidden ? '' : `<div class="ballot-bar"><i style="width:${pct}%"></i></div>`}
           </div>
-          <div class="ballot-check">${i === 0 && detail.totalVotes ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>' : ''}</div>
+          <div class="ballot-check">${picked ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>' : ''}</div>
         </div>`;
       }).join('')
     : `<div class="ballot-row"><div class="ballot-info"><div class="ballot-name">${esc(e.title)}</div>
@@ -4881,12 +4909,12 @@ function heroElectionHTML(e, detail) {
   <div class="ballot ballot-hero">
     <div class="ballot-head">
       <div class="ballot-title">${esc(e.title)}</div>
-      <span class="ballot-live${e.closed ? ' off' : ''}"><i></i> ${e.closed ? 'समाप्त' : 'LIVE'}</span>
+      <span class="ballot-live${closed ? ' off' : ''}"><i></i> ${closed ? 'समाप्त' : 'मतदान चालू'}</span>
     </div>
     ${body}
     <div class="ballot-foot">
       <span>${fmt((detail && detail.totalVotes) || e.totalVotes || 0)} वोट</span>
-      <span>${esc([e.gram, e.district].filter(Boolean).join(', '))}</span>
+      <span>${hidden ? 'उम्मीदवारों की गिनती छिपी' : esc([e.gram, e.district].filter(Boolean).join(', '))}</span>
     </div>
   </div>`;
 }
@@ -4980,7 +5008,7 @@ function emptyLiveHTML(opts) {
     <ol class="empty-steps">
       <li><b>चुनाव बनाइए</b> — गाँव/कॉलोनी का नाम, ज़िला, उम्मीदवार (2 मिनट)</li>
       <li><b>कोड मिलेगा</b> — जैसे <code>7K2M9Q</code>; वही लोगों को भेजिए या यहीं खोजिए</li>
-      <li><b>सब वोट करेंगे</b> — एक डिवाइस = एक वोट, नतीजे लाइव</li>
+      <li><b>सब वोट करेंगे</b> — एक डिवाइस = एक वोट, परिणाम मतदान समाप्त होने पर</li>
     </ol>
     <div class="empty-actions">
       <a class="btn btn-primary" href="#/create">अपना चुनाव बनाएँ →</a>
@@ -5896,13 +5924,50 @@ function clearPoll() {
 }
 
 function resultsHTML(d) {
-  const r = d.results;
-  const total = r.totalVotes;
-  const maxVotes = Math.max(1, ...r.candidates.map((c) => c.votes));
-  const rows = r.candidates.map((c, i) => {
-    const isWinner = r.winnerIds.includes(c.id);
-    const isLeader = !d.closed && total > 0 && c.votes === maxVotes && c.votes > 0;
-    const pct = total ? (c.votes / total) * 100 : 0;
+  const r = d.results || { totalVotes: d.totalVotes || 0, candidates: [], winnerIds: [], tie: false };
+  const total = Number(r.totalVotes != null ? r.totalVotes : d.totalVotes) || 0;
+  const hidden = d.resultsHidden === true || r.resultsHidden === true || !d.closed;
+
+  if (hidden) {
+    const hiddenRows = (Array.isArray(r.candidates) && r.candidates.length ? r.candidates : (d.candidates || []))
+      .map((c) => `
+      <div class="res-row">
+        <div class="res-top">
+          <div class="res-sym">${symbolSVG(c.symbol, 22)}</div>
+          <div style="min-width:0">
+            <div class="res-name">${esc(c.name)}</div>
+            <div class="res-party">${c.party ? esc(c.party) : 'निर्दलीय'}</div>
+          </div>
+          <div class="res-num"><b>🔒</b><span>छिपा</span></div>
+        </div>
+        <div class="res-track"><div class="res-fill" style="width:0%"></div></div>
+        <div class="res-foot"><span>उम्मीदवार</span><span>गिनती मतदान समाप्त होने पर</span></div>
+      </div>`).join('');
+
+    return `
+      <div class="status-banner warn"><div class="sb-ico">${ICON.lock}</div><div>
+        <h4>उम्मीदवारों की गिनती अभी छिपी है</h4>
+        <p>मतदान चलने के दौरान लाइव गिनती केवल डेवलपर देख सकता है। ${d.endsAt ? `परिणाम <b>${esc(fullDate(d.endsAt))}</b> पर अपने आप सबके लिए खुल जाएगा।` : 'चुनाव बंद होते ही परिणाम सबके लिए खुल जाएगा।'}</p>
+      </div></div>
+      <div class="total-strip">
+        <div class="ts-item"><b>${fmt(total)}</b><span>कुल वोट</span></div>
+        <div class="divider"></div>
+        <div class="ts-item"><b>${d.candidates.length}</b><span>उम्मीदवार</span></div>
+        <div class="divider"></div>
+        <div class="ts-item"><b>छिपा</b><span>परिणाम</span></div>
+        <div class="divider"></div>
+        <div class="ts-item" style="margin-left:auto"><span class="live-note" id="liveNote">कुल वोट संख्या अपडेट होगी · उम्मीदवारों की गिनती छिपी</span></div>
+      </div>
+      <div class="results">${hiddenRows}</div>`;
+  }
+
+  const candidates = Array.isArray(r.candidates) ? r.candidates : [];
+  const winnerIds = Array.isArray(r.winnerIds) ? r.winnerIds : [];
+  const maxVotes = Math.max(1, ...candidates.map((c) => Number(c.votes) || 0));
+  const rows = candidates.map((c, i) => {
+    const votes = Number(c.votes) || 0;
+    const isWinner = winnerIds.includes(c.id);
+    const pct = total ? (votes / total) * 100 : 0;
     return `
     <div class="res-row ${isWinner ? 'win' : ''}">
       <div class="res-top">
@@ -5910,32 +5975,31 @@ function resultsHTML(d) {
         <div style="min-width:0">
           <div class="res-name">${esc(c.name)}
             ${isWinner ? '<span class="crown" title="विजेता">👑</span>' : ''}
-            ${isLeader ? '<span class="badge" style="font-size:10px;padding:2px 8px">आगे</span>' : ''}
           </div>
           <div class="res-party">${c.party ? esc(c.party) : 'निर्दलीय'}</div>
         </div>
-        <div class="res-num"><b>${fmt(c.votes)}</b><span>${c.percent}%</span></div>
+        <div class="res-num"><b>${fmt(votes)}</b><span>${c.percent}%</span></div>
       </div>
       <div class="res-track"><div class="res-fill" style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="res-foot"><span>क्रम #${i + 1}</span><span>${fmt(c.votes)} / ${fmt(total)} वोट</span></div>
+      <div class="res-foot"><span>क्रम #${i + 1}</span><span>${fmt(votes)} / ${fmt(total)} वोट</span></div>
     </div>`;
   }).join('');
 
   let banner = '';
-  if (d.closed) {
-    if (r.tie) {
-      banner = `<div class="winner-card"><div class="trophy">${ICON.handshake}</div><div>
-        <h4>अंतिम परिणाम</h4><div class="wname">बराबरी का चुनाव</div>
-        <div class="wsub">${r.candidates.filter((c) => c.votes === maxVotes).map((c) => esc(c.name)).join(' और ')} — दोनों को बराबर वोट</div></div></div>`;
-    } else if (r.winnerIds.length) {
-      const w = r.candidates.find((c) => c.id === r.winnerIds[0]);
+  if (r.tie) {
+    banner = `<div class="winner-card"><div class="trophy">${ICON.handshake}</div><div>
+      <h4>अंतिम परिणाम</h4><div class="wname">बराबरी का चुनाव</div>
+      <div class="wsub">${candidates.filter((c) => (Number(c.votes) || 0) === maxVotes).map((c) => esc(c.name)).join(' और ')} — बराबर वोट</div></div></div>`;
+  } else if (winnerIds.length) {
+    const w = candidates.find((c) => c.id === winnerIds[0]);
+    if (w) {
       banner = `<div class="winner-card"><div class="trophy">${ICON.trophy}</div><div>
         <h4>विजेता की घोषणा</h4>
         <div class="wname" style="display:flex;align-items:center;gap:9px">${symbolSVG(w.symbol, 26)} ${esc(w.name)}</div>
         <div class="wsub">${w.party ? esc(w.party) + ' · ' : ''}${fmt(w.votes)} वोट · ${w.percent}% हिस्सा</div></div></div>`;
-    } else {
-      banner = `<div class="status-banner warn"><div class="sb-ico">${ICON.warn}</div><div><h4>कोई वोट नहीं पड़ा</h4><p>इस चुनाव में एक भी वोट दर्ज नहीं हुआ।</p></div></div>`;
     }
+  } else {
+    banner = `<div class="status-banner warn"><div class="sb-ico">${ICON.warn}</div><div><h4>कोई वोट नहीं पड़ा</h4><p>इस चुनाव में एक भी वोट दर्ज नहीं हुआ।</p></div></div>`;
   }
 
   return `
@@ -5945,9 +6009,9 @@ function resultsHTML(d) {
       <div class="divider"></div>
       <div class="ts-item"><b>${d.candidates.length}</b><span>उम्मीदवार</span></div>
       <div class="divider"></div>
-      <div class="ts-item"><b>${d.closed ? 'घोषित' : 'चालू'}</b><span>स्थिति</span></div>
+      <div class="ts-item"><b>घोषित</b><span>स्थिति</span></div>
       <div class="divider"></div>
-      <div class="ts-item" style="margin-left:auto"><span class="live-note" id="liveNote">${d.closed ? 'परिणाम स्थायी रूप से सुरक्षित' : 'लाइव जुड़ रहे हैं…'}</span></div>
+      <div class="ts-item" style="margin-left:auto"><span class="live-note" id="liveNote">परिणाम स्थायी रूप से सुरक्षित</span></div>
     </div>
     <div class="results">${rows}</div>`;
 }
@@ -6017,6 +6081,7 @@ function _fitOneLine(x, text, maxW) {
 }
 
 async function resultCardCanvas(d) {
+  if (!d || !d.closed) throw new Error('परिणाम कार्ड मतदान समाप्त होने के बाद ही बनेगा।');
   const F = '"Noto Sans Devanagari", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
   const res = (d && d.results) || {};
   const all = (Array.isArray(res.candidates) ? res.candidates.slice() : [])
@@ -6117,7 +6182,7 @@ async function resultCardCanvas(d) {
   x.font = '600 21px ' + F;
   x.fillText('JANMAT · सामुदायिक राय-सर्वे', inX + 86, y + 62);
   // स्थिति बैज (दाएँ)
-  const badge = d.closed ? 'अंतिम परिणाम' : 'लाइव स्थिति';
+  const badge = 'अंतिम परिणाम';
   x.font = '800 24px ' + F;
   const bw = x.measureText(badge).width + 44;
   roundRect(x, cardX + cardW - 46 - bw, y + 12, bw, 48, 24);
@@ -6319,6 +6384,10 @@ async function downloadResultCard(code, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'कार्ड बन रहा है…'; }
   try {
     const fresh = await api('/api/elections/' + encodeURIComponent(code));
+    if (!fresh.closed) {
+      toast('परिणाम कार्ड मतदान समाप्त होने के बाद ही बनेगा — चलती गिनती केवल डेवलपर देख सकता है।', 'err');
+      return;
+    }
     const cv = await resultCardCanvas(fresh);
     const name = 'janmat-parinaam-' + String(fresh.code || code || 'card') + '.png';
     const save = (href) => {
@@ -6451,7 +6520,7 @@ function electionHTML(d) {
       <div class="ehead-actions">
         <button class="btn btn-saffron btn-sm" data-copy="${esc(link)}">${ICON.link} लिंक कॉपी करें</button>
         <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${waText}">WhatsApp पर शेयर</a>
-        <button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड</button>
+        ${d.closed ? '<button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड</button>' : ''}
         <a class="btn btn-ghost btn-sm" href="#/explore">सारे चुनाव</a>
       </div>
     </div>
@@ -6461,16 +6530,16 @@ function electionHTML(d) {
     <div class="wrap wrap-narrow">
       <div class="section-title">
         <h2>${d.closed ? 'अंतिम परिणाम' : d.hasVoted ? 'आपका वोट' : 'अपना वोट डालिए'}</h2>
-        ${d.closed ? '' : '<span class="badge live"><i></i> लाइव</span>'}
+        ${d.closed ? '' : '<span class="badge live"><i></i> मतदान जारी</span>'}
       </div>
       <div id="voteArea">${voteAreaHTML(d)}</div>
 
       <div style="margin-top:34px">
         <div class="section-title">
-          <h2>परिणाम</h2>
+          <h2>${d.closed ? 'अंतिम परिणाम' : 'परिणाम — मतदान के बाद'}</h2>
           <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड डाउनलोड</button>
-            <span class="badge live"><i id="liveDot"></i> <span id="liveLabel">लाइव</span></span>
+            ${d.closed ? '<button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड डाउनलोड</button>' : ''}
+            <span class="badge ${d.closed ? 'closed' : 'live'}"><i id="liveDot"></i> <span id="liveLabel">${d.closed ? 'घोषित' : 'गिनती छिपी'}</span></span>
           </span>
         </div>
         <div id="resultsBox">${resultsHTML(d)}</div>
@@ -6538,12 +6607,17 @@ async function renderElection(code, opts = {}) {
 
   if (!d.closed) {
     let noteMode = 'live';
-    const noteText = () => (noteMode === 'live' ? 'लाइव अपडेट · बिना रीलोड' : 'हर 6 सेकंड में अपडेट');
+    const noteText = () => (noteMode === 'live' ? 'कुल वोट संख्या अपडेट होगी · उम्मीदवारों की गिनती छिपी' : 'कुल वोट संख्या हर कुछ सेकंड में अपडेट होगी · गिनती छिपी');
     const setNote = (txt) => {
       const n = document.getElementById('liveNote');
       if (n) n.textContent = txt;
     };
     const paint = (fresh) => {
+      if (!!fresh.closed !== !!d.closed) {
+        d = fresh;
+        renderElection(d.code, { refresh: true });
+        return;
+      }
       const box = document.getElementById('resultsBox');
       if (box) box.innerHTML = resultsHTML(fresh);
       // resultsBox ke andar hi liveNote hai — dobara set karo
@@ -6567,7 +6641,7 @@ async function renderElection(code, opts = {}) {
       onStatus: (st) => {
         noteMode = st === 'live' ? 'live' : 'poll';
         const lbl = document.getElementById('liveLabel');
-        if (lbl) lbl.textContent = st === 'live' ? 'लाइव' : 'फिर जुड़ रहे हैं…';
+        if (lbl) lbl.textContent = st === 'live' ? 'गिनती छिपी' : 'फिर जुड़ रहे हैं…';
         setNote(st === 'live' ? noteText() : 'फिर जुड़ रहे हैं…');
       },
     });
@@ -6578,7 +6652,7 @@ async function renderElection(code, opts = {}) {
       pollTimer = setInterval(pollOnce, window.JANMAT_OFFLINE ? 15000 : 6000);
       if (window.JANMAT_OFFLINE) {
         const lbl0 = document.getElementById('liveLabel');
-        if (lbl0) lbl0.textContent = 'लोकल';
+        if (lbl0) lbl0.textContent = 'लोकल · गिनती छिपी';
       }
     }
     setNote(noteText());
@@ -7100,7 +7174,7 @@ function settingsAppearanceHTML() {
     <div class="section-title"><h2 style="font-size:18px">सुविधा</h2></div>
     <ul class="info-list">
       <li><b>भाषा</b><span>हिंदी (देवनागरी)</span></li>
-      <li><b>लाइव अपडेट</b><span>चालू — चुनाव पेज पर तुरंत अपडेट</span></li>
+      <li><b>मतदान जानकारी</b><span>कुल वोट संख्या अपडेट होती है; उम्मीदवारों की गिनती अंत में खुलती है</span></li>
       <li><b>फ़ॉन्ट साइज़</b><span>साइट के साथ (मोबाइल-फ्रेंडली)</span></li>
     </ul>
   </div>`;
@@ -7218,7 +7292,7 @@ function settingsElectionsHTML(data) {
           </div>
           <h3>${esc(e.title)}</h3>
           <p class="muted small">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)} · ${esc(timeAgo(e.createdAt))}</p>
-          <p class="my-leading">${lead && lead.votes ? `आगे: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'अभी कोई वोट नहीं पड़ा'}</p>
+          <p class="my-leading">${!e.closed ? (e.totalVotes ? `परिणाम मतदान समाप्त होने पर दिखेगा · अभी ${fmt(e.totalVotes)} वोट पड़े हैं` : 'परिणाम मतदान समाप्त होने पर दिखेगा · अभी कोई वोट नहीं पड़ा') : (lead && lead.votes ? `अंतिम गिनती में सबसे अधिक: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'इस चुनाव में कोई वोट नहीं पड़ा')}</p>
           ${e.endsAt ? `<p class="my-timer">${ICON.clock} ${e.closed ? 'समाप्त: ' + esc(fullDate(e.endsAt)) : '<b data-count-to="' + (e.remainingMs || 0) + '">' + esc(fmtLeft(e.remainingMs || 0)) + '</b> · समाप्ति ' + esc(fullDate(e.endsAt))}</p>` : ''}
         </div>
         <div class="my-item-actions">
@@ -7253,7 +7327,7 @@ function settingsVotesHTML(data) {
         </div>
         <div class="my-item-actions">
           <div class="voted-sym">${symbolSVG(v.candidate ? v.candidate.symbol : 'diya', 26)}</div>
-          <a class="btn btn-ghost btn-sm" href="#/e/${v.code}">परिणाम</a>
+          <a class="btn btn-ghost btn-sm" href="#/e/${v.code}">${v.closed ? 'परिणाम</a>' : 'चुनाव देखें</a>'}
         </div>
       </div>`).join('')}
   </div>`;
@@ -8602,7 +8676,7 @@ function renderDisclaimer() {
 
         <h3>5. गोपनीयता व डेटा</h3>
         <ul>
-          <li>सार्वजनिक रूप से सभी को सिर्फ़ <b>परिणाम</b> (किसको कितने वोट, कौन आगे) दिखता है।</li>
+          <li>मतदान चलने के दौरान सार्वजनिक रूप से उम्मीदवारों की गिनती नहीं दिखती। चुनाव बंद होने के बाद अंतिम परिणाम सभी को दिखता है। चलती गिनती केवल डेवलपर देख सकता है।</li>
           <li>किसने किसको वोट दिया और किसने कौन-सा चुनाव बनाया — यह जानकारी <b>केवल डेवलपर</b> पासवर्ड से देख सकता है।</li>
           <li>तकनीकी रूप से डिवाइस-फिंगरप्रिंट व IP पता सीमा-नियंत्रण (एक डिवाइस एक वोट) के लिए संग्रहीत हो सकते हैं।</li>
           <li>डेटा सर्वर/डेटाबेस पर सुरक्षित रखा जाता है; कोई संवेदनशील जानकारी तीसरे पक्ष को नहीं बेची जाती।</li>
@@ -8734,8 +8808,8 @@ function renderPrivacy() {
 
         <h3>2. डेटा किसको दिखता है</h3>
         <ul>
-          <li><b>सबको (सार्वजनिक):</b> चुनाव का नाम, जगह, उम्मीदवार, कुल वोट, प्रतिशत और कौन आगे है।</li>
-          <li><b>आयोजक को:</b> अपने चुनाव की गिनती और “बंद करें” का अधिकार। वह भी <b>नहीं</b> देख सकता कि किसने किसको वोट दिया।</li>
+          <li><b>सबको (सार्वजनिक):</b> मतदान के दौरान चुनाव का नाम, जगह, उम्मीदवार और कुल पड़े वोट। उम्मीदवारों के वोट व प्रतिशत चुनाव बंद होने के बाद दिखते हैं।</li>
+          <li><b>आयोजक को:</b> अपने चुनाव की कुल मतदान संख्या और तय नियमों के अनुसार “बंद करें” का अधिकार। चलती उम्मीदवार-गिनती उसे भी नहीं दिखती, और वह यह भी <b>नहीं</b> देख सकता कि किसने किसको वोट दिया।</li>
           <li><b>डेवलपर को (पासवर्ड से):</b> पूरा विवरण — हर यूज़र का नाम, उसके चुनाव और किसने किसको वोट दिया। यह सिर्फ़ साइट के संचालक के पास है।</li>
           <li><b>किसी को नहीं बेचा जाता</b> और किसी विज्ञापन कंपनी से साझा नहीं किया जाता।</li>
         </ul>

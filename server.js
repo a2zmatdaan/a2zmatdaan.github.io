@@ -563,6 +563,28 @@ function tally(e) {
   };
 }
 
+/** सार्वजनिक परिणाम: मतदान चलते समय उम्मीदवारों की गिनती सर्वर से बाहर
+   ही नहीं जाएगी। उम्मीदवारों का क्रम भी मूल सूची वाला रहेगा, ताकि क्रम से
+   आगे-पीछे होने का अनुमान न लगे। चुनाव बंद होते ही पूरी गिनती खुलती है। */
+function publicResults(e) {
+  const t = tally(e);
+  if (e.closed) return { ...t, resultsHidden: false };
+  return {
+    totalVotes: t.totalVotes,
+    resultsHidden: true,
+    candidates: e.candidates.map((c) => ({
+      id: c.id,
+      name: c.name,
+      party: c.party || '',
+      symbol: c.symbol || 'diya',
+      votes: null,
+      percent: null,
+    })),
+    winnerIds: [],
+    tie: false,
+  };
+}
+
 /** PUBLIC view — creator & voter identities are stripped out */
 function publicSummary(e) {
   const t = tally(e);
@@ -584,15 +606,19 @@ function publicSummary(e) {
     endsAt: e.endsAt || null,
     durationMin: e.durationMin || null,
     autoClosed: !!e.autoClosed,
+    resultsHidden: !e.closed,
+    resultsVisible: !!e.closed,
+    resultsRevealAt: e.closed ? (e.closedAt || e.endsAt || null) : (e.endsAt || null),
     remainingMs: remainingMs(e),
     timeUp: isTimeUp(e),
   };
 }
 
-const APP_VERSION = '8.2.4-ui-cleanup';
+const APP_VERSION = '8.2.5-result-lock';
 
 function publicElection(e, viewer) {
-  const t = tally(e);
+  syncElection(e);
+  const t = publicResults(e);
   const myVote = viewer && e.votes[viewer.id] ? e.votes[viewer.id].c : null;
   const isCreator = !!(viewer && e.creatorId === viewer.id);
   return {
@@ -1872,7 +1898,7 @@ async function handleApi(req, res, pathname) {
       .sort((a, b) => b.createdAt - a.createdAt)
       .map((e) => ({
         ...publicSummary(e),
-        leading: tally(e).candidates[0] || null,
+        leading: e.closed ? (tally(e).candidates[0] || null) : null,
         canManage: true,
         canDelete: !!(e.closed || !e.endsAt || isTimeUp(e, nowTs)),
         remainingMs: remainingMs(e, nowTs),
@@ -2204,6 +2230,10 @@ async function handleApi(req, res, pathname) {
       samePhoneVotes: samePhone,
       election: {
         ...publicElection(e, null),
+        /* डेवलपर का निजी दृश्य — चलता चुनाव भी पूरी गिनती के साथ */
+        results: { ...tally(e), resultsHidden: false },
+        resultsHidden: false,
+        resultsVisible: true,
         creatorName: creator ? creator.name : 'अज्ञात',
         creatorUsername: creator ? (creator.username || null) : null,
         creatorId: e.creatorId,

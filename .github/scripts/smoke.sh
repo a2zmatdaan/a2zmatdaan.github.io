@@ -67,6 +67,7 @@ fi
 LOGIN=$(curl -fsS -X POST "$BASE/api/auth/register" -H 'content-type: application/json' \
   -d "{\"name\":\"CI जाँच\",\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
 TOKEN=$(printf '%s' "$LOGIN" | json_get token)
+USERID=$(printf '%s' "$LOGIN" | json_get user.id)
 [ -n "$TOKEN" ] && [ "$(printf '%s' "$LOGIN" | json_get user.username)" = "ci_jaanch" ] && ok "unique username + PIN से नया खाता" || { bad "लॉगिन फेल"; exit 1; }
 DUPUSER=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/auth/register" -H 'content-type: application/json' -d "{\"name\":\"दूसरा CI\",\"username\":\"ci_jaanch\",\"password\":\"592847\",\"deviceId\":\"dusri-device-999\"}")
 [ "$DUPUSER" = "409" ] && ok "वही username दूसरे को नहीं मिला (409)" || bad "duplicate username रुका नहीं (मिला $DUPUSER)"
@@ -103,7 +104,7 @@ GV2=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/elections/$CODE/
 # --- public page par pehchan chhupi rahe ------------------------------------
 PUB=$(curl -fsS "$BASE/api/elections/$CODE")
 if printf '%s' "$PUB" | grep -q "CI जाँच"; then bad "सार्वजनिक API में वोटर का नाम लीक"; else ok "सार्वजनिक API में पहचान नहीं"; fi
-[ "$(printf '%s' "$PUB" | json_get totalVotes)" = "2" ] && ok "गिनती दिख रही (2)" || bad "गिनती ग़लत"
+[ -z "$(printf '%s' "$PUB" | json_get totalVotes)" ] && ok "चलते चुनाव में सार्वजनिक कुल वोट छिपे हैं" || bad "चलते चुनाव में कुल वोट दिख गए"
 
 # --- developer panel --------------------------------------------------------
 DEV=$(curl -fsS -X POST "$BASE/api/dev/login" -H 'content-type: application/json' -d "{\"password\":\"$PASS\"}")
@@ -116,6 +117,53 @@ BADCODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/dev/login" -
 if [ -n "$DTOK" ]; then
   OV=$(curl -fsS "$BASE/api/dev/overview" -H "x-dev-token: $DTOK")
   if printf '%s' "$OV" | grep -q "CI जाँच"; then ok "डेवलपर को वोटर का नाम दिखता है"; else bad "डेवलपर डेटा में नाम नहीं"; fi
+  CLOSECODE=$(curl -s -o /tmp/janmat-close.json -w '%{http_code}' -X POST "$BASE/api/elections/$CODE/close" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{}')
+  [ "$CLOSECODE" = "200" ] && ok "डेवलपर ने परीक्षण चुनाव बंद किया" || bad "परीक्षण चुनाव बंद नहीं हुआ ($CLOSECODE)"
+  PUBCLOSED=$(curl -fsS "$BASE/api/elections/$CODE")
+  [ "$(printf '%s' "$PUBCLOSED" | json_get totalVotes)" = "2" ] && ok "समाप्ति के बाद कुल वोट (2) सार्वजनिक हुए" || bad "समाप्ति के बाद कुल वोट नहीं दिखे"
+
+  # --- developer account moderation: temp ban -> unban -> permanent ban -> unban ---
+  if [ -n "$USERID" ]; then
+    MOD=$(curl -s -o /tmp/janmat-mod.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$USERID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"ban-temporary","days":7,"reason":"CI test"}')
+    [ "$MOD" = "200" ] && ok "डेवलपर ने 7 दिन की अस्थायी रोक लगाई" || bad "अस्थायी रोक नहीं लगी ($MOD)"
+    OLDME=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/auth/me" "${AUTH[@]}")
+    [ "$OLDME" = "401" ] && ok "रोक लगते ही पुराना session बंद" || bad "पुराना session बंद नहीं हुआ ($OLDME)"
+    BANLOGIN=$(curl -s -o /tmp/janmat-ban.json -w '%{http_code}' -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d "{\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
+    [ "$BANLOGIN" = "403" ] && grep -q 'ACCOUNT_BANNED_TEMPORARY' /tmp/janmat-ban.json && ok "अस्थायी रोक में login 403 + कारण" || bad "अस्थायी रोक login नहीं रुका ($BANLOGIN)"
+
+    UNBAN=$(curl -s -o /tmp/janmat-unban.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$USERID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"unban"}')
+    [ "$UNBAN" = "200" ] && ok "डेवलपर ने रोक हटाई" || bad "रोक नहीं हटी ($UNBAN)"
+    LOGIN2=$(curl -s -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d "{\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
+    TOKEN=$(printf '%s' "$LOGIN2" | json_get token)
+    AUTH=(-H "x-user-token: $TOKEN" -H "x-device-id: $DEVICE")
+    [ -n "$TOKEN" ] && ok "रोक हटने के बाद login फिर चला" || bad "रोक हटने के बाद login नहीं चला"
+
+    PERM=$(curl -s -o /tmp/janmat-perm.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$USERID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"ban-permanent","reason":"CI permanent"}')
+    [ "$PERM" = "200" ] && ok "डेवलपर ने स्थायी रोक लगाई" || bad "स्थायी रोक नहीं लगी ($PERM)"
+    PERMLOGIN=$(curl -s -o /tmp/janmat-perm-login.json -w '%{http_code}' -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d "{\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
+    [ "$PERMLOGIN" = "403" ] && grep -q 'ACCOUNT_BANNED_PERMANENT' /tmp/janmat-perm-login.json && ok "स्थायी रोक में login 403" || bad "स्थायी रोक login नहीं रुका ($PERMLOGIN)"
+    UNBAN2=$(curl -s -o /tmp/janmat-unban2.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$USERID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"unban"}')
+    [ "$UNBAN2" = "200" ] && ok "स्थायी रोक भी डेवलपर ने हटाई" || bad "स्थायी रोक नहीं हटी ($UNBAN2)"
+    LOGIN3=$(curl -s -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d "{\"username\":\"ci_jaanch\",\"password\":\"731946\",\"deviceId\":\"$DEVICE\"}")
+    TOKEN=$(printf '%s' "$LOGIN3" | json_get token)
+    AUTH=(-H "x-user-token: $TOKEN" -H "x-device-id: $DEVICE")
+    [ -n "$TOKEN" ] && ok "स्थायी रोक हटने के बाद login चला" || bad "स्थायी रोक हटने के बाद login नहीं चला"
+  fi
+
+  # --- developer delete: alag test account login/session band ---
+  DELREG=$(curl -s -X POST "$BASE/api/auth/register" -H 'content-type: application/json' -d '{"name":"CI हटाना","username":"ci_delete","password":"731946","deviceId":"ci-delete-device-001"}')
+  DELID=$(printf '%s' "$DELREG" | json_get user.id)
+  DELTOK=$(printf '%s' "$DELREG" | json_get token)
+  if [ -n "$DELID" ] && [ -n "$DELTOK" ]; then
+    DEVDEL=$(curl -s -o /tmp/janmat-dev-delete.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$DELID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"delete","confirm":true,"reason":"CI delete"}')
+    [ "$DEVDEL" = "200" ] && ok "डेवलपर ने गलत/परीक्षण खाता हटाया" || bad "डेवलपर delete नहीं हुआ ($DEVDEL)"
+    DELME=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/auth/me" -H "x-user-token: $DELTOK" -H 'x-device-id: ci-delete-device-001')
+    [ "$DELME" = "401" ] && ok "हटाए खाते का session बंद" || bad "हटाए खाते का session बंद नहीं ($DELME)"
+    DELLOGIN=$(curl -s -o /tmp/janmat-del-login.json -w '%{http_code}' -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d '{"username":"ci_delete","password":"731946","deviceId":"ci-delete-device-001"}')
+    [ "$DELLOGIN" = "401" ] && grep -q 'ACCOUNT_DELETED' /tmp/janmat-del-login.json && ok "हटाए खाते से login बंद" || bad "हटाए खाते से login नहीं रुका ($DELLOGIN)"
+  else
+    bad "delete परीक्षण खाता नहीं बना"
+  fi
 fi
 
 # --- account delete: naam jaaye, ginti bache ---------------------------------

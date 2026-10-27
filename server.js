@@ -236,6 +236,9 @@ function migrateDb(d) {
     if (!u || typeof u !== 'object') continue;
     if (typeof u.username !== 'string') u.username = u.username ? String(u.username) : null;
     if (!u.accountStatus) u.accountStatus = u.deletedAt ? 'deleted' : 'active';
+    if (u.deletedAt) u.accountStatus = 'deleted';
+    if (!['active', 'replaced', 'deleted', 'banned'].includes(u.accountStatus)) u.accountStatus = 'active';
+    if (!Array.isArray(u.moderationHistory)) u.moderationHistory = [];
     if (!u.devices || typeof u.devices !== 'object') u.devices = {};
     for (const dk of Object.keys(u.devices)) {
       if (!Array.isArray(d.deviceAccounts[dk])) d.deviceAccounts[dk] = [];
@@ -481,7 +484,7 @@ function userByToken(token) {
   const now = Date.now();
   for (const u of db.users) {
     if (!u || !u.pwHash || !u.tokens) continue;   /* बिना-पासवर्ड पुराने सत्र अब मान्य नहीं */
-    if ((u.accountStatus || 'active') !== 'active' || u.deletedAt) continue;
+    if (!isActiveUser(u)) continue;   /* banned/deleted/replaced सत्र यहाँ कभी मान्य नहीं */
     const rec = u.tokens[hashed];
     if (!rec) continue;
     const exp = rec && typeof rec === 'object' ? Number(rec.expiresAt || 0) : tokenTime(rec) + SESSION_DAYS * 864e5;
@@ -563,14 +566,15 @@ function tally(e) {
   };
 }
 
-/** सार्वजनिक परिणाम: मतदान चलते समय उम्मीदवारों की गिनती सर्वर से बाहर
-   ही नहीं जाएगी। उम्मीदवारों का क्रम भी मूल सूची वाला रहेगा, ताकि क्रम से
-   आगे-पीछे होने का अनुमान न लगे। चुनाव बंद होते ही पूरी गिनती खुलती है। */
+/** सार्वजनिक परिणाम: मतदान चलते समय कुल वोट और उम्मीदवारों की गिनती,
+   दोनों सर्वर से बाहर नहीं जाएँगे। उम्मीदवारों का क्रम भी मूल सूची वाला
+   रहेगा, ताकि क्रम से आगे-पीछे होने का अनुमान न लगे। चुनाव बंद होते ही
+   पूरी गिनती खुलती है। */
 function publicResults(e) {
   const t = tally(e);
   if (e.closed) return { ...t, resultsHidden: false };
   return {
-    totalVotes: t.totalVotes,
+    totalVotes: null,
     resultsHidden: true,
     candidates: e.candidates.map((c) => ({
       id: c.id,
@@ -599,7 +603,7 @@ function publicSummary(e) {
     closed: !!e.closed,
     closedAt: e.closedAt || null,
     demo: !!e.isDemo,
-    totalVotes: t.totalVotes,
+    totalVotes: e.closed ? t.totalVotes : null,
     candidateCount: e.candidates.length,
     symbols: e.candidates.slice(0, 5).map((c) => c.symbol || 'diya'),
     /* ---- timer ---- */
@@ -614,7 +618,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.2.5-result-lock';
+const APP_VERSION = '8.2.7-account-moderation';
 
 function publicElection(e, viewer) {
   syncElection(e);
@@ -653,10 +657,184 @@ function quotaFor(user) {
   };
 }
 
+function formatIstDateTime(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  try {
+    return new Date(n).toLocaleString('hi-IN', {
+      timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    });
+  } catch (_) { return new Date(n).toISOString(); }
+}
+function clearBanFields(user) {
+  if (!user) return;
+  user.banType = null;
+  user.bannedAt = null;
+  user.banUntil = null;
+  user.banReason = '';
+  user.banBy = null;
+}
+/* तय दिनों वाली रोक की अवधि पूरी होते ही खाता अपने आप फिर चालू। कोई cron नहीं चाहिए —
+   खाते की अगली जाँच (login/token/dev overview) पर यह स्थिति खुद ठीक हो जाती है। */
+function syncUserBan(user) {
+  if (!user || typeof user !== 'object') return false;
+  if (user.deletedAt && user.accountStatus !== 'deleted') {
+    user.accountStatus = 'deleted';
+    clearBanFields(user);
+    save();
+    return true;
+  }
+  if ((user.accountStatus || 'active') !== 'banned') return false;
+  if (user.banType === 'temporary') {
+    const until = Number(user.banUntil || 0);
+    if (until && Date.now() >= until) {
+      user.accountStatus = 'active';
+      user.banExpiredAt = Date.now();
+      clearBanFields(user);
+      save();
+      return true;
+    }
+    if (!until) { user.banType = 'permanent'; save(); return true; }
+  } else if (user.banType !== 'permanent') {
+    user.banType = 'permanent';
+    save();
+    return true;
+  }
+  return false;
+}
+function accountModerationInfo(user) {
+  syncUserBan(user);
+  const status = user && user.deletedAt ? 'deleted' : ((user && user.accountStatus) || 'active');
+  const banned = status === 'banned';
+  return {
+    accountStatus: status,
+    deletedAt: user && user.deletedAt ? user.deletedAt : null,
+    deletedBy: user && user.deletedBy ? user.deletedBy : null,
+    deleteReason: user && user.deleteReason ? String(user.deleteReason).slice(0, 200) : '',
+    banType: banned ? (user.banType || 'permanent') : null,
+    bannedAt: banned ? (user.bannedAt || null) : null,
+    banUntil: banned && user.banType === 'temporary' ? (Number(user.banUntil) || null) : null,
+    banReason: banned && user.banReason ? String(user.banReason).slice(0, 200) : '',
+    banBy: banned ? (user.banBy || null) : null,
+  };
+}
+function inactiveAccountResponse(user, context = 'login') {
+  if (!user) return null;
+  syncUserBan(user);
+  if (isActiveUser(user)) return null;
+  const info = accountModerationInfo(user);
+  const doing = context === 'recover' ? 'PIN रिकवरी' : 'लॉगिन';
+  const reasonText = info.banReason ? ' डेवलपर द्वारा दिया कारण: “' + info.banReason + '”।' : '';
+  if (info.accountStatus === 'banned' && info.banType === 'temporary') {
+    return {
+      status: 403,
+      body: {
+        error: 'कारण: इस खाते पर ' + formatIstDateTime(info.banUntil) + ' तक अस्थायी रोक लगी है, इसलिए ' + doing + ' नहीं होगा। अवधि पूरी होने पर खाता अपने आप फिर चालू हो जाएगा।' + reasonText + ' अगर रोक गलत लगी हो तो शिकायत पेज से पुनर्विचार माँगें।',
+        code: 'ACCOUNT_BANNED_TEMPORARY',
+        accountStatus: 'banned',
+        banType: 'temporary',
+        banUntil: info.banUntil,
+      },
+    };
+  }
+  if (info.accountStatus === 'banned') {
+    return {
+      status: 403,
+      body: {
+        error: 'कारण: इस खाते पर स्थायी रोक लगी है, इसलिए ' + doing + ' नहीं होगा। Team Janmat द्वारा रोक हटाए जाने पर ही यह खाता फिर चालू होगा।' + reasonText + ' अगर रोक गलत लगी हो तो शिकायत पेज से पुनर्विचार माँगें।',
+        code: 'ACCOUNT_BANNED_PERMANENT',
+        accountStatus: 'banned',
+        banType: 'permanent',
+        banUntil: null,
+      },
+    };
+  }
+  if (info.accountStatus === 'deleted') {
+    return {
+      status: 401,
+      body: {
+        error: 'कारण: यह खाता हटाया जा चुका है, इसलिए इससे ' + doing + ' नहीं होगा।',
+        code: 'ACCOUNT_DELETED',
+        accountStatus: 'deleted',
+      },
+    };
+  }
+  return {
+    status: 401,
+    body: {
+      error: context === 'recover'
+        ? 'कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।'
+        : 'यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।',
+      code: 'ACCOUNT_INACTIVE',
+      accountStatus: info.accountStatus,
+    },
+  };
+}
+function noteUserModeration(user, action, reason = '', banUntil = null, by = 'developer') {
+  if (!user) return;
+  if (!Array.isArray(user.moderationHistory)) user.moderationHistory = [];
+  user.moderationHistory.push({
+    action,
+    at: Date.now(),
+    by,
+    reason: String(reason || '').slice(0, 200),
+    banUntil: banUntil ? Number(banUntil) : null,
+  });
+  user.moderationHistory = user.moderationHistory.slice(-20);
+}
+/* खाता हटाना = पहचान/credential/session खत्म; चुनाव और वोट-गिनती इतिहास की
+   सच्चाई के लिए बिना नाम के बने रहते हैं। username दोबारा किसी को नहीं मिलता। */
+function softDeleteAccount(user, by = 'self', reason = '') {
+  const now = Date.now();
+  user.deletedAt = now;
+  user.deletedBy = by;
+  user.deleteReason = String(reason || '').slice(0, 200);
+  user.accountStatus = 'deleted';
+  clearBanFields(user);
+  user.name = 'हटाया गया उपयोगकर्ता';
+  user.nameLower = 'deleted:' + user.id;
+  user.pwHash = null;
+  user.recoveryHash = null;
+  user.tokens = {};
+  const developerDelete = by === 'developer';
+  if (developerDelete) {
+    /* Developer द्वारा हटाए गलत खाते के फ़ोन से सीधा नया खाता न बने — device इतिहास
+      सुरक्षित रहता है, इसलिए वापसी सिर्फ़ developer-approved appeal से होगी। */
+    if (!db.deviceAccounts || typeof db.deviceAccounts !== 'object') db.deviceAccounts = {};
+    for (const dk of Object.keys(user.devices || {})) {
+      if (!Array.isArray(db.deviceAccounts[dk])) db.deviceAccounts[dk] = [];
+      if (!db.deviceAccounts[dk].includes(user.id)) db.deviceAccounts[dk].push(user.id);
+    }
+  }
+  user.devices = {};
+  user.lastLoginAt = now;
+  if (!developerDelete && db.deviceOwner && typeof db.deviceOwner === 'object') {
+    Object.keys(db.deviceOwner).forEach((d) => {
+      if (db.deviceOwner[d] === user.id) delete db.deviceOwner[d];
+    });
+  }
+  if (!developerDelete && db.fpOwner && typeof db.fpOwner === 'object') {
+    Object.keys(db.fpOwner).forEach((k) => {
+      if (db.fpOwner[k] === user.id) delete db.fpOwner[k];
+    });
+  }
+  for (const store of developerDelete ? [] : [db.deviceAccounts, db.fpAccounts]) {
+    if (!store || typeof store !== 'object') continue;
+    for (const key of Object.keys(store)) {
+      if (!Array.isArray(store[key])) continue;
+      store[key] = store[key].filter((id) => id !== user.id);
+      if (!store[key].length) delete store[key];
+    }
+  }
+  return user;
+}
 function publicUser(u) {
-  return { id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active', createdAt: u.createdAt };
+  syncUserBan(u);
+  return { id: u.id, name: u.name, username: u.username || null, accountStatus: u.deletedAt ? 'deleted' : (u.accountStatus || 'active'), createdAt: u.createdAt };
 }
 function isActiveUser(u) {
+  syncUserBan(u);
   return !!(u && !u.deletedAt && (u.accountStatus || 'active') === 'active');
 }
 function findUserByUsername(username) {
@@ -689,7 +867,11 @@ function deviceConflictUsers(device, fp) {
   for (const u of db.users) {
     if (u && device && u.devices && u.devices[device]) ids.add(u.id);
   }
-  return [...ids].map((id) => findUserById(id)).filter(isActiveUser);
+  return [...ids].map((id) => findUserById(id)).filter((u) => {
+    syncUserBan(u);
+    const status = u && u.deletedAt ? 'deleted' : ((u && u.accountStatus) || 'active');
+    return !!(u && (['active', 'banned'].includes(status) || (status === 'deleted' && u.deletedBy === 'developer')));
+  });
 }
 function syncApplications() {
   if (!Array.isArray(db.accountApplications)) db.accountApplications = [];
@@ -752,11 +934,13 @@ function findRecoveryMatch(candidates, recoveryCode) {
 }
 function claimableLegacy(candidates, device, fp) {
   /* पुराना बिना-पासवर्ड खाता सिर्फ़ उसी फ़ोन से claim होगा जो पहले से उससे बँधा है */
-  return candidates.find((u) => !u.pwHash) && orderedCandidates(candidates, device, fp)
-    .find((u) => !u.pwHash && ((db.deviceOwner && db.deviceOwner[device] === u.id) || (fp && db.fpOwner && db.fpOwner[fp] === u.id))) || null;
+  return orderedCandidates(candidates, device, fp)
+    .find((u) => isActiveUser(u) && !u.pwHash && ((db.deviceOwner && db.deviceOwner[device] === u.id) || (fp && db.fpOwner && db.fpOwner[fp] === u.id))) || null;
 }
 /* सफल login/register/recovery के बाद का साझा काम: device याद + guest वोट जोड़ना + token */
 async function completeAuth(req, res, user, body, extra = {}, status = 200) {
+  const blocked = inactiveAccountResponse(user, 'login');
+  if (blocked) return sendJson(res, blocked.status, blocked.body);
   const device = deviceKeyFrom(req, body && body.deviceId);
   if (!db.deviceOwner) db.deviceOwner = {};
   db.deviceOwner[device] = user.id;   /* अब यह सिर्फ़ "इस फ़ोन का आख़िरी खाता" है, रोक नहीं */
@@ -1086,7 +1270,7 @@ async function handleApi(req, res, pathname) {
 
   if (method === 'GET' && parts[1] === 'stats' && parts.length === 2) {
     let votes = 0;
-    db.elections.forEach((e) => (votes += Object.keys(e.votes || {}).length));
+    db.elections.forEach((e) => { syncElection(e); if (e.closed) votes += Object.keys(e.votes || {}).length; });
     const states = new Set(db.elections.map((e) => e.state).filter(Boolean));
     return sendJson(res, 200, {
       elections: db.elections.length,
@@ -1192,7 +1376,7 @@ async function handleApi(req, res, pathname) {
 
     /* 🔒 एक फ़ोन = एक खाता: इस फ़ोन पर पहले से कोई खाता है तो सीधा दूसरा signup नहीं —
        परिवार के दूसरे सदस्य के लिए appeal वाला रास्ता है (डेवलपर मंज़ूरी देगा)। */
-    const conflicts = deviceConflictUsers(device, fp).filter((u) => u.username || u.pwHash);
+    const conflicts = deviceConflictUsers(device, fp).filter((u) => u.username || u.pwHash || !isActiveUser(u));
     if (conflicts.length) {
       return sendJson(res, 409, {
         error: 'इस फ़ोन पर पहले से एक खाता बना हुआ है, इसलिए दूसरा खाता सीधे नहीं बनेगा। अगर आप परिवार के दूसरे सदस्य हैं तो नीचे "Username भूल गए / दूसरा खाता चाहिए" से appeal भेजें — Team Janmat जाँचकर मंज़ूरी देगी।',
@@ -1240,7 +1424,7 @@ async function handleApi(req, res, pathname) {
     }
     const device = deviceKeyFrom(req, body.deviceId);
     const fp = fpKeyFrom(req);
-    const candidates = orderedCandidates(findUsersByName(nv.name), device, fp).filter((u) => !u.username);
+    const candidates = orderedCandidates(findUsersByName(nv.name), device, fp).filter((u) => !u.username && isActiveUser(u));
     const oldPassword = String(body.oldPassword == null ? '' : body.oldPassword);
     let target = oldPassword ? findPasswordMatch(candidates, oldPassword) : null;
     if (!target) target = claimableLegacy(candidates, device, fp);
@@ -1297,9 +1481,8 @@ async function handleApi(req, res, pathname) {
       }
       return sendJson(res, 401, { error: 'इस username का कोई खाता नहीं मिला। Username ध्यान से देखें — या "नया खाता बनाएँ" चुनें।', code: 'ACCOUNT_NOT_FOUND' });
     }
-    if (!isActiveUser(user)) {
-      return sendJson(res, 401, { error: 'यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।', code: 'ACCOUNT_INACTIVE' });
-    }
+    const blockedLogin = inactiveAccountResponse(user, 'login');
+    if (blockedLogin) return sendJson(res, blockedLogin.status, blockedLogin.body);
     if (!user.pwHash || !verifySecret(password, user.pwHash)) {
       return sendJson(res, 401, { error: 'PIN सही नहीं है। ध्यान से दोबारा लिखें — या "PIN भूल गए" से रिकवरी कोड इस्तेमाल करें।', code: 'WRONG_PASSWORD' });
     }
@@ -1324,9 +1507,8 @@ async function handleApi(req, res, pathname) {
     if (!user) {
       return sendJson(res, 401, { error: 'कारण: इस username (@' + uv.username + ') का कोई खाता ही नहीं मिला। username की spelling ध्यान से देखें — लॉगिन कार्ड पर लिखा username बिल्कुल वैसा ही लिखें।', code: 'ACCOUNT_NOT_FOUND' });
     }
-    if (!isActiveUser(user)) {
-      return sendJson(res, 401, { error: 'कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।', code: 'ACCOUNT_INACTIVE' });
-    }
+    const blockedRecovery = inactiveAccountResponse(user, 'recover');
+    if (blockedRecovery) return sendJson(res, blockedRecovery.status, blockedRecovery.body);
     const code = normalizeRecovery(body.recoveryCode);
     if (code.length !== 12) {
       return sendJson(res, 400, { error: 'कारण: रिकवरी कोड अधूरा लिखा है। कोड कुल 12 अक्षरों का होता है (जैसे ABCD-EFGH-JKLM) — आपने ' + code.length + ' अक्षर लिखे हैं। कार्ड देखकर पूरा कोड लिखें।', code: 'RECOVERY_CODE_FORMAT' });
@@ -1410,7 +1592,11 @@ async function handleApi(req, res, pathname) {
     let lostTarget = null;
     if (kind === 'lost-pin-recovery') {
       lostTarget = findUserByUsername(uv.username);
-      if (!lostTarget || !isActiveUser(lostTarget)) {
+      if (lostTarget) {
+        const blockedLost = inactiveAccountResponse(lostTarget, 'login');
+        if (blockedLost) return sendJson(res, blockedLost.status, blockedLost.body);
+      }
+      if (!lostTarget) {
         return sendJson(res, 404, { error: 'कारण: इस username (@' + uv.username + ') का कोई चालू खाता नहीं मिला। वही username लिखें जो आपके खाते पर था — spelling ध्यान से देखें।', code: 'ACCOUNT_NOT_FOUND' });
       }
     } else if (usernameTaken(uv.username)) {
@@ -1598,7 +1784,21 @@ async function handleApi(req, res, pathname) {
     }
     const states = [...new Set(db.elections.map((e) => e.state).filter(Boolean))].sort();
     list.forEach((e) => syncElection(e));
-    return sendJson(res, 200, { elections: list.slice(0, 300).map(publicSummary), states });
+    /* चल रहे चुनाव सबसे ऊपर; उनमें समाप्ति के सबसे नज़दीक चुनाव पहले। */
+    list.sort((a, b) => {
+      if (a.closed !== b.closed) return a.closed ? 1 : -1;
+      if (!a.closed && !b.closed) {
+        const ae = Number(a.endsAt) > 0 ? Number(a.endsAt) : Infinity;
+        const be = Number(b.endsAt) > 0 ? Number(b.endsAt) : Infinity;
+        if (ae !== be) return ae - be;
+      }
+      return b.createdAt - a.createdAt;
+    });
+    return sendJson(res, 200, {
+      elections: list.slice(0, 300).map(publicSummary),
+      states,
+      totalElections: db.elections.length,
+    });
   }
 
   /* ---------- elections: create ---------- */
@@ -1799,9 +1999,9 @@ async function handleApi(req, res, pathname) {
     }
     await saveNow();
 
-    // 🔴 real-time: election subscribers ko naya tally + developer ko live vote
-    const fresh = publicElection(election, null);
-    broadcastElection(election.code, { election: fresh });
+    /* सार्वजनिक stream पर हर वोट का update नहीं भेजा जाता, वरना event
+       गिनकर कुल वोटों का अनुमान लग सकता है। सार्वजनिक update केवल
+       चुनाव बंद/हटने जैसी स्थिति बदलने पर जाएगा; डेवलपर feed जारी रहेगी। */
     broadcastDev('vote', {
       at: election.votes[voterId].at,
       userName: voterName,
@@ -1811,7 +2011,7 @@ async function handleApi(req, res, pathname) {
       candidateName: cand.name,
       candidateSymbol: cand.symbol || 'diya',
       candidateParty: cand.party || '',
-      totalVotes: fresh.totalVotes,
+      totalVotes: Object.keys(election.votes || {}).length,
     });
 
     return sendJson(res, 200, {
@@ -1935,23 +2135,8 @@ async function handleApi(req, res, pathname) {
     if (body.confirm !== true) return sendJson(res, 400, { error: 'पुष्टि ज़रूरी है।' });
 
     // votes aur chunav rehte hain (results ki sacchai ke liye), par pehchan hata di jaati hai
-    viewer.deletedAt = Date.now();
-    viewer.name = 'हटाया गया उपयोगकर्ता';
-    viewer.nameLower = 'deleted:' + viewer.id;
-    viewer.tokens = {};
-    viewer.devices = {};
-    viewer.lastLoginAt = Date.now();
-
-    /* इस डिवाइस की बाँध (binding) भी हटाओ, वरना वह मोबाइल हमेशा के लिए
-       "इस मोबाइल से पहले ... लॉगिन हो चुका है" पर अटक जाएगा */
-    if (db.deviceOwner) {
-      Object.keys(db.deviceOwner).forEach((d) => {
-        if (db.deviceOwner[d] === viewer.id) delete db.deviceOwner[d];
-      });
-    }
-    if (db.fpOwner) {
-      Object.keys(db.fpOwner).forEach((k) => { if (db.fpOwner[k] === viewer.id) delete db.fpOwner[k]; });
-    }
+    softDeleteAccount(viewer, 'self', '');
+    noteUserModeration(viewer, 'delete', '', null, 'self');
 
     await saveNow();
     broadcastDev('user-deleted', { userId: viewer.id, at: Date.now() });
@@ -2049,13 +2234,24 @@ async function handleApi(req, res, pathname) {
   if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'overview') {
     const users = db.users
       .map((u) => {
+        syncUserBan(u);
         const created = db.elections.filter((e) => e.creatorId === u.id);
         const voted = db.elections.filter((e) => e.votes[u.id]);
+        const moderation = accountModerationInfo(u);
         return {
           id: u.id,
           name: u.name,
           username: u.username || null,
-          accountStatus: u.accountStatus || 'active',
+          accountStatus: moderation.accountStatus,
+          deletedAt: moderation.deletedAt,
+          deletedBy: moderation.deletedBy,
+          deleteReason: moderation.deleteReason,
+          banType: moderation.banType,
+          bannedAt: moderation.bannedAt,
+          banUntil: moderation.banUntil,
+          banReason: moderation.banReason,
+          banBy: moderation.banBy,
+          moderationHistory: Array.isArray(u.moderationHistory) ? u.moderationHistory.slice(-5) : [],
           hasPassword: !!u.pwHash,
           createdAt: u.createdAt,
           lastLoginAt: u.lastLoginAt || null,
@@ -2162,6 +2358,90 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { stats, usage, users, elections, votes: voteRows.slice(0, 1000) });
   }
 
+  /* ---------- developer: खाता रोकना / रोक हटाना / हटाना ----------
+     • ban-temporary: चुने दिनों तक login/session बंद; अवधि पूरी होते ही auto-active
+     • ban-permanent: developer द्वारा unban करने तक बंद
+     • delete: identity + credential + sessions खत्म; चुनाव/वोट-गिनती इतिहास में बची रहती है */
+  if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'users' && parts[3] && parts[4] === 'moderate' && parts.length === 5) {
+    if (!rateLimit(req, 'dev-user-moderate', 30, 60000)) {
+      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। एक मिनट बाद फिर प्रयास करें।' });
+    }
+    const body = await readBody(req);
+    const user = findUserById(clean(parts[3], 40));
+    if (!user) return sendJson(res, 404, { error: 'यह खाता नहीं मिला। सूची ताज़ा करके फिर देखें।' });
+    syncUserBan(user);
+    const action = clean(body.action, 30);
+    const reason = clean(body.reason, 200);
+    const now = Date.now();
+    const status = user.deletedAt ? 'deleted' : (user.accountStatus || 'active');
+    if (!['ban-temporary', 'ban-permanent', 'unban', 'delete'].includes(action)) {
+      return sendJson(res, 400, { error: 'खाता कार्रवाई सही नहीं है।' });
+    }
+    if (status === 'deleted') {
+      return sendJson(res, 409, { error: 'यह खाता पहले ही हटाया जा चुका है।', code: 'ACCOUNT_DELETED', user: { id: user.id, username: user.username || null, ...accountModerationInfo(user) } });
+    }
+    if (status === 'replaced') {
+      return sendJson(res, 409, { error: 'यह पुराना बदला हुआ (replaced) खाता है — इसका login पहले ही बंद है। नए खाते पर कार्रवाई करें।', code: 'ACCOUNT_REPLACED' });
+    }
+
+    let message = '';
+    if (action === 'ban-temporary') {
+      const days = Number(body.days);
+      if (!Number.isInteger(days) || days < 1 || days > 3650) {
+        return sendJson(res, 400, { error: 'रोक के दिन सही लिखें — 1 से 3650 दिनों के बीच पूरा नंबर होना चाहिए।' });
+      }
+      user.accountStatus = 'banned';
+      user.banType = 'temporary';
+      user.bannedAt = now;
+      user.banUntil = now + days * 864e5;
+      user.banReason = reason;
+      user.banBy = 'developer';
+      user.tokens = {};   /* हर जगह से तुरंत logout */
+      noteUserModeration(user, action, reason, user.banUntil, 'developer');
+      message = 'खाते पर ' + days + ' दिन की रोक लग गई — ' + formatIstDateTime(user.banUntil) + ' तक login बंद रहेगा।';
+    } else if (action === 'ban-permanent') {
+      user.accountStatus = 'banned';
+      user.banType = 'permanent';
+      user.bannedAt = now;
+      user.banUntil = null;
+      user.banReason = reason;
+      user.banBy = 'developer';
+      user.tokens = {};   /* हर जगह से तुरंत logout */
+      noteUserModeration(user, action, reason, null, 'developer');
+      message = 'खाते पर स्थायी रोक लग गई। आपके द्वारा रोक हटाए जाने तक login बंद रहेगा।';
+    } else if (action === 'unban') {
+      if (status !== 'banned') {
+        return sendJson(res, 409, { error: 'इस खाते पर अभी कोई रोक लगी ही नहीं है।', code: 'ACCOUNT_NOT_BANNED' });
+      }
+      user.accountStatus = 'active';
+      user.unbannedAt = now;
+      clearBanFields(user);
+      user.tokens = {};   /* पुराने session वापस नहीं; उपयोगकर्ता PIN से फिर login करेगा */
+      noteUserModeration(user, action, reason, null, 'developer');
+      message = 'रोक हट गई — खाता फिर चालू है। उपयोगकर्ता को username + PIN से दोबारा login करना होगा।';
+    } else if (action === 'delete') {
+      if (body.confirm !== true) return sendJson(res, 400, { error: 'खाता हटाने की पुष्टि ज़रूरी है।' });
+      softDeleteAccount(user, 'developer', reason);
+      noteUserModeration(user, action, reason, null, 'developer');
+      message = 'खाता हटा दिया गया। login और credential बंद हैं; पुराने चुनाव/वोटों की गिनती बिना नाम के सुरक्षित रहेगी।';
+    }
+
+    await saveNow();
+    broadcastDev(action === 'delete' ? 'user-deleted' : 'user-moderated', {
+      userId: user.id,
+      username: user.username || null,
+      action,
+      at: now,
+      banUntil: user.banUntil || null,
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      action,
+      message,
+      user: { id: user.id, name: user.name, username: user.username || null, ...accountModerationInfo(user) },
+    });
+  }
+
   /* ---------- developer: शिकायतें (grievance dashboard) ---------- */
   if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'complaints' && parts.length === 3) {
     const list = [...db.complaints].sort((a, b) => b.at - a.at);
@@ -2232,6 +2512,7 @@ async function handleApi(req, res, pathname) {
         ...publicElection(e, null),
         /* डेवलपर का निजी दृश्य — चलता चुनाव भी पूरी गिनती के साथ */
         results: { ...tally(e), resultsHidden: false },
+        totalVotes: tally(e).totalVotes,
         resultsHidden: false,
         resultsVisible: true,
         creatorName: creator ? creator.name : 'अज्ञात',
@@ -2293,7 +2574,7 @@ async function handleApi(req, res, pathname) {
         resultingUserId: a.resultingUserId || null,
         replacedUserId: a.replacedUserId || null,
         conflicts: (a.conflictUserIds || []).map((id) => findUserById(id)).filter(Boolean).map((u) => ({
-          id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active',
+          id: u.id, name: u.name, username: u.username || null, accountStatus: accountModerationInfo(u).accountStatus, banType: u.accountStatus === 'banned' ? (u.banType || 'permanent') : null, banUntil: u.accountStatus === 'banned' && u.banType === 'temporary' ? (Number(u.banUntil) || null) : null, banReason: u.accountStatus === 'banned' ? (u.banReason || '') : '',
           hasPassword: !!u.pwHash, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null,
           electionsCreated: db.elections.filter((e) => e.creatorId === u.id).length,
           votesCast: db.elections.filter((e) => e.votes && e.votes[u.id]).length,
@@ -2339,6 +2620,10 @@ async function handleApi(req, res, pathname) {
       if (!target) {
         return sendJson(res, 404, { error: 'जिस खाते (@' + app.desiredUsername + ') की वापसी माँगी गई थी वह अब नहीं मिला — यह आवेदन अस्वीकार करें।' });
       }
+      syncUserBan(target);
+      if (!isActiveUser(target)) {
+        return sendJson(res, 409, { error: target.accountStatus === 'banned' ? 'यह खाता अभी रोक (ban) में है — PIN reset करने से पहले यूज़र्स सूची से रोक हटाएँ, वरना मंज़ूरी रोक को चुपचाप खत्म कर देगी।' : 'यह खाता अब चालू नहीं है — PIN वापसी मंज़ूर नहीं हो सकती। आवेदन अस्वीकार करें।', code: 'ACCOUNT_NOT_ACTIVE' });
+      }
       target.pwHash = app.pwHash;
       target.recoveryHash = app.recoveryHash;
       target.pwSetAt = Date.now();
@@ -2363,6 +2648,9 @@ async function handleApi(req, res, pathname) {
     const conflicts = (app.conflictUserIds || []).map((id) => findUserById(id)).filter((u) => isActiveUser(u));
     let replaceTarget = replaceUserId ? findUserById(replaceUserId) : null;
     if (replaceUserId && !replaceTarget) return sendJson(res, 400, { error: 'बदला जाने वाला पुराना खाता नहीं मिला।' });
+    if (replaceTarget && !isActiveUser(replaceTarget)) {
+      return sendJson(res, 409, { error: replaceTarget.accountStatus === 'banned' ? 'बदला जाने वाला खाता अभी रोक (ban) में है — पहले यूज़र्स सूची से रोक हटाएँ, तभी उसे नए username से बदला जा सकता है।' : 'बदला जाने वाला पुराना खाता अब चालू नहीं है।', code: 'ACCOUNT_NOT_ACTIVE' });
+    }
     if (!replaceTarget && conflicts.length && mode !== 'additional') {
       return sendJson(res, 400, { error: 'इस फ़ोन पर पुराना खाता मौजूद है। कृपया चुनें: पुराना खाता बदलें (उसका डेटा नए username में आएगा) या अलग दूसरा खाता बनाएँ।', code: 'REPLACE_CHOICE_REQUIRED' });
     }

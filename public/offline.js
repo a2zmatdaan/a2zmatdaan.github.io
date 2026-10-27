@@ -71,6 +71,9 @@
       if (!u || typeof u !== 'object') return;
       if (typeof u.username !== 'string') u.username = u.username ? String(u.username) : null;
       if (!u.accountStatus) u.accountStatus = u.deletedAt ? 'deleted' : 'active';
+      if (u.deletedAt) u.accountStatus = 'deleted';
+      if (['active', 'replaced', 'deleted', 'banned'].indexOf(u.accountStatus) === -1) u.accountStatus = 'active';
+      if (!Array.isArray(u.moderationHistory)) u.moderationHistory = [];
       if (!u.devices || typeof u.devices !== 'object') u.devices = {};
       if (!u.tokens || typeof u.tokens !== 'object') u.tokens = {};
       Object.keys(u.devices).forEach(function (dk) {
@@ -136,7 +139,7 @@
     var t = tally(e);
     if (e.closed) { t.resultsHidden = false; return t; }
     return {
-      totalVotes: t.totalVotes, resultsHidden: true,
+      totalVotes: null, resultsHidden: true,
       candidates: e.candidates.map(function (c) {
         return {
           id: c.id, name: c.name, party: c.party || '', symbol: c.symbol || 'diya',
@@ -151,7 +154,7 @@
     return {
       code: e.code, title: e.title, type: e.type, gram: e.gram, district: e.district, state: e.state,
       createdAt: e.createdAt, closed: !!e.closed, closedAt: e.closedAt || null, demo: !!e.isDemo,
-      totalVotes: t.totalVotes, candidateCount: e.candidates.length,
+      totalVotes: e.closed ? t.totalVotes : null, candidateCount: e.candidates.length,
       resultsHidden: !e.closed, resultsVisible: !!e.closed, resultsRevealAt: e.closed ? (e.closedAt || e.endsAt || null) : (e.endsAt || null),
       symbols: e.candidates.slice(0, 5).map(function (c) { return c.symbol || 'diya'; })
     };
@@ -228,7 +231,101 @@
     if (s.length <= 3) return s ? s.charAt(0) + '***' : null;
     return s.slice(0, 2) + '***' + s.slice(-2);
   }
-  function isActiveUser(u) { return !!(u && !u.deletedAt && (u.accountStatus || 'active') === 'active'); }
+  function formatBanDate(ts) {
+    var n = Number(ts);
+    if (!isFinite(n) || n <= 0) return '';
+    try { return new Date(n).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }); }
+    catch (_) { return new Date(n).toISOString(); }
+  }
+  function clearBanFields(user) {
+    if (!user) return;
+    user.banType = null; user.bannedAt = null; user.banUntil = null; user.banReason = ''; user.banBy = null;
+  }
+  function syncUserBan(user) {
+    if (!user || typeof user !== 'object') return false;
+    if (user.deletedAt && user.accountStatus !== 'deleted') {
+      user.accountStatus = 'deleted'; clearBanFields(user); save(); return true;
+    }
+    if ((user.accountStatus || 'active') !== 'banned') return false;
+    if (user.banType === 'temporary') {
+      var until = Number(user.banUntil || 0);
+      if (until && Date.now() >= until) {
+        user.accountStatus = 'active'; user.banExpiredAt = Date.now(); clearBanFields(user); save(); return true;
+      }
+      if (!until) { user.banType = 'permanent'; save(); return true; }
+    } else if (user.banType !== 'permanent') {
+      user.banType = 'permanent'; save(); return true;
+    }
+    return false;
+  }
+  function moderationInfo(user) {
+    syncUserBan(user);
+    var status = user && user.deletedAt ? 'deleted' : ((user && user.accountStatus) || 'active');
+    var banned = status === 'banned';
+    return {
+      accountStatus: status,
+      deletedAt: user && user.deletedAt ? user.deletedAt : null,
+      deletedBy: user && user.deletedBy ? user.deletedBy : null,
+      deleteReason: user && user.deleteReason ? String(user.deleteReason).slice(0, 200) : '',
+      banType: banned ? (user.banType || 'permanent') : null,
+      bannedAt: banned ? (user.bannedAt || null) : null,
+      banUntil: banned && user.banType === 'temporary' ? (Number(user.banUntil) || null) : null,
+      banReason: banned && user.banReason ? String(user.banReason).slice(0, 200) : '',
+      banBy: banned ? (user.banBy || null) : null
+    };
+  }
+  function inactiveAccountError(user, context) {
+    if (!user) return null;
+    syncUserBan(user);
+    if (isActiveUser(user)) return null;
+    var info = moderationInfo(user);
+    var doing = context === 'recover' ? 'PIN रिकवरी' : 'लॉगिन';
+    var reasonText = info.banReason ? ' डेवलपर द्वारा दिया कारण: “' + info.banReason + '”।' : '';
+    if (info.accountStatus === 'banned' && info.banType === 'temporary') {
+      return err('कारण: इस खाते पर ' + formatBanDate(info.banUntil) + ' तक अस्थायी रोक लगी है, इसलिए ' + doing + ' नहीं होगा। अवधि पूरी होने पर खाता अपने आप फिर चालू हो जाएगा।' + reasonText + ' अगर रोक गलत लगी हो तो शिकायत पेज से पुनर्विचार माँगें।', 403, 'ACCOUNT_BANNED_TEMPORARY', { accountStatus: 'banned', banType: 'temporary', banUntil: info.banUntil });
+    }
+    if (info.accountStatus === 'banned') {
+      return err('कारण: इस खाते पर स्थायी रोक लगी है, इसलिए ' + doing + ' नहीं होगा। Team Janmat द्वारा रोक हटाए जाने पर ही यह खाता फिर चालू होगा।' + reasonText + ' अगर रोक गलत लगी हो तो शिकायत पेज से पुनर्विचार माँगें।', 403, 'ACCOUNT_BANNED_PERMANENT', { accountStatus: 'banned', banType: 'permanent', banUntil: null });
+    }
+    if (info.accountStatus === 'deleted') {
+      return err('कारण: यह खाता हटाया जा चुका है, इसलिए इससे ' + doing + ' नहीं होगा।', 401, 'ACCOUNT_DELETED', { accountStatus: 'deleted' });
+    }
+    return err(context === 'recover' ? 'कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।' : 'यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।', 401, 'ACCOUNT_INACTIVE', { accountStatus: info.accountStatus });
+  }
+  function noteUserModeration(user, action, reason, banUntil, by) {
+    if (!user) return;
+    if (!Array.isArray(user.moderationHistory)) user.moderationHistory = [];
+    user.moderationHistory.push({ action: action, at: Date.now(), by: by || 'developer', reason: String(reason || '').slice(0, 200), banUntil: banUntil ? Number(banUntil) : null });
+    user.moderationHistory = user.moderationHistory.slice(-20);
+  }
+  function softDeleteAccount(user, by, reason) {
+    var now = Date.now();
+    user.deletedAt = now; user.deletedBy = by || 'developer'; user.deleteReason = String(reason || '').slice(0, 200);
+    user.accountStatus = 'deleted'; clearBanFields(user);
+    user.name = 'हटाया गया उपयोगकर्ता'; user.nameLower = 'deleted:' + user.id;
+    user.pwHash = null; user.recoveryHash = null; user.tokens = {};
+    var developerDelete = (by || 'developer') === 'developer';
+    if (developerDelete) {
+      if (!db.deviceAccounts || typeof db.deviceAccounts !== 'object') db.deviceAccounts = {};
+      Object.keys(user.devices || {}).forEach(function (dk) {
+        if (!Array.isArray(db.deviceAccounts[dk])) db.deviceAccounts[dk] = [];
+        if (db.deviceAccounts[dk].indexOf(user.id) === -1) db.deviceAccounts[dk].push(user.id);
+      });
+    }
+    user.devices = {}; user.lastLoginAt = now;
+    if (!developerDelete) Object.keys(db.deviceOwner || {}).forEach(function (d) { if (db.deviceOwner[d] === user.id) delete db.deviceOwner[d]; });
+    if (!developerDelete) Object.keys(db.fpOwner || {}).forEach(function (k) { if (db.fpOwner[k] === user.id) delete db.fpOwner[k]; });
+    (developerDelete ? [] : [db.deviceAccounts, db.fpAccounts]).forEach(function (store) {
+      if (!store || typeof store !== 'object') return;
+      Object.keys(store).forEach(function (key) {
+        if (!Array.isArray(store[key])) return;
+        store[key] = store[key].filter(function (id) { return id !== user.id; });
+        if (!store[key].length) delete store[key];
+      });
+    });
+    return user;
+  }
+  function isActiveUser(u) { syncUserBan(u); return !!(u && !u.deletedAt && (u.accountStatus || 'active') === 'active'); }
   function findUserByUsername(username) {
     var u = normalizeUsername(username);
     if (!u) return null;
@@ -289,7 +386,11 @@
     if (deviceKey) { add(db.deviceAccounts[deviceKey]); add(db.deviceOwner[deviceKey]); }
     if (fpKey) { add(db.fpAccounts[fpKey]); add(db.fpOwner[fpKey]); }
     db.users.forEach(function (u) { if (u && deviceKey && u.devices && u.devices[deviceKey] && ids.indexOf(u.id) === -1) ids.push(u.id); });
-    return ids.map(function (id) { return findUserById(id); }).filter(isActiveUser);
+    return ids.map(function (id) { return findUserById(id); }).filter(function (u) {
+      syncUserBan(u);
+      var status = u && u.deletedAt ? 'deleted' : ((u && u.accountStatus) || 'active');
+      return !!(u && (['active', 'banned'].indexOf(status) !== -1 || (status === 'deleted' && u.deletedBy === 'developer')));
+    });
   }
   function adoptGuestVotes(user, deviceKey) {
     var key = 'g:' + deviceKey;
@@ -492,7 +593,7 @@
       var votes = 0;
       var states = {};
       db.elections.forEach(function (e) {
-        votes += Object.keys(e.votes || {}).length;
+        if (e.closed) votes += Object.keys(e.votes || {}).length;
         if (e.state) states[e.state] = 1;
       });
       return {
@@ -574,7 +675,7 @@
         lgr.name = rname; lgr.username = runame; lgr.accountStatus = 'active';
         return finishAuth(lgr, { claimed: true, recoveryCode: rc0 });
       }
-      var conflicts = deviceConflictUsers(deviceKey, fpKey).filter(function (u) { return u.username || u.pwHash; });
+      var conflicts = deviceConflictUsers(deviceKey, fpKey).filter(function (u) { return u.username || u.pwHash || !isActiveUser(u); });
       if (conflicts.length) throw err('इस फ़ोन पर पहले से एक खाता बना हुआ है, इसलिए दूसरा खाता सीधे नहीं बनेगा। अगर आप परिवार के दूसरे सदस्य हैं तो नीचे "Username भूल गए / दूसरा खाता चाहिए" से appeal भेजें — Team Janmat जाँचकर मंज़ूरी देगी।', 409, 'DEVICE_HAS_ACCOUNT');
       var nuser = { id: rid(8), name: rname, nameLower: nameKey(rname), username: runame, accountStatus: 'active', createdAt: Date.now(), lastLoginAt: Date.now(), isDemo: false, devices: {}, tokens: {} };
       var rcode = setPreviewPassword(nuser, rpin);
@@ -620,7 +721,7 @@
         if (pending) throw err('यह खाता अभी Team Janmat की जाँच में है (Pending)। मंज़ूरी मिलते ही इसी username + PIN से लॉगिन होगा।', 401, 'ACCOUNT_PENDING');
         throw err('इस username का कोई खाता नहीं मिला। Username ध्यान से देखें — या "नया खाता बनाएँ" चुनें।', 401, 'ACCOUNT_NOT_FOUND');
       }
-      if (!isActiveUser(luser)) throw err('यह खाता अब चालू नहीं है। अगर आपका खाता नए username से जुड़ा था तो उससे लॉगिन करें।', 401, 'ACCOUNT_INACTIVE');
+      var lblocked = inactiveAccountError(luser, 'login'); if (lblocked) throw lblocked;
       if (!luser.pwHash || !checkPreview(lpass, luser.pwHash)) throw err('PIN सही नहीं है। ध्यान से दोबारा लिखें — या "PIN भूल गए" से रिकवरी कोड इस्तेमाल करें।', 401, 'WRONG_PASSWORD');
       return finishAuth(luser, {});
     }
@@ -631,7 +732,7 @@
       var ruser = findUserByUsername(runame2);
       var want = String(body.recoveryCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (!ruser) throw err('कारण: इस username (@' + runame2 + ') का कोई खाता ही नहीं मिला। username की spelling ध्यान से देखें — लॉगिन कार्ड पर लिखा username बिल्कुल वैसा ही लिखें।', 401, 'ACCOUNT_NOT_FOUND');
-      if (!isActiveUser(ruser)) throw err('कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।', 401, 'ACCOUNT_INACTIVE');
+      var rblocked = inactiveAccountError(ruser, 'recover'); if (rblocked) throw rblocked;
       if (want.length !== 12) throw err('कारण: रिकवरी कोड अधूरा लिखा है। कोड कुल 12 अक्षरों का होता है (जैसे ABCD-EFGH-JKLM) — आपने ' + want.length + ' अक्षर लिखे हैं। कार्ड देखकर पूरा कोड लिखें।', 400, 'RECOVERY_CODE_FORMAT');
       if (!ruser.recoveryHash) throw err('कारण: इस (पुराने) खाते पर रिकवरी कोड सेट ही नहीं है। नीचे "खाता वापसी आवेदन" भेजें — Team Janmat जाँचकर आपके उसी खाते पर नया PIN लगा देगी।', 401, 'RECOVERY_NOT_SET');
       if (!checkPreview(want, ruser.recoveryHash)) throw err('कारण: यह रिकवरी कोड इस खाते के मौजूदा कोड से मेल नहीं खाता। एक भी अक्षर गलत हो तो कोड नहीं चलेगा (कोड में O, I, 0, 1 होते ही नहीं)। अगर आपको पहले कभी नया कार्ड मिला था या आपने Settings से नया कोड बनाया था, तो वही सबसे नया कोड लगेगा — पुराना कार्ड नहीं चलेगा। कार्ड ही खो गया हो तो नीचे "खाता वापसी आवेदन" भेजें।', 401, 'RECOVERY_CODE_WRONG');
@@ -667,7 +768,8 @@
       var lostT = null;
       if (akind === 'lost-pin-recovery') {
         lostT = findUserByUsername(auname);
-        if (!lostT || !isActiveUser(lostT)) throw err('कारण: इस username (@' + auname + ') का कोई चालू खाता नहीं मिला। वही username लिखें जो आपके खाते पर था — spelling ध्यान से देखें।', 404, 'ACCOUNT_NOT_FOUND');
+        if (lostT) { var lostBlocked = inactiveAccountError(lostT, 'login'); if (lostBlocked) throw lostBlocked; }
+        if (!lostT) throw err('कारण: इस username (@' + auname + ') का कोई चालू खाता नहीं मिला। वही username लिखें जो आपके खाते पर था — spelling ध्यान से देखें।', 404, 'ACCOUNT_NOT_FOUND');
       } else if (usernameTaken(auname)) throw err('यह username (@' + auname + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', 409, 'USERNAME_TAKEN', { suggestions: usernameSuggestions(auname) });
       syncApplications();
       var dupApp = null;
@@ -772,9 +874,18 @@
           return [e.title, e.gram, e.district, e.state, e.type, e.code].join(' ').toLowerCase().indexOf(search) !== -1;
         });
       }
+      list.sort(function (a, b) {
+        if (!!a.closed !== !!b.closed) return a.closed ? 1 : -1;
+        if (!a.closed && !b.closed) {
+          var ae = Number(a.endsAt) > 0 ? Number(a.endsAt) : Infinity;
+          var be = Number(b.endsAt) > 0 ? Number(b.endsAt) : Infinity;
+          if (ae !== be) return ae - be;
+        }
+        return b.createdAt - a.createdAt;
+      });
       var st = {};
       db.elections.forEach(function (e) { if (e.state) st[e.state] = 1; });
-      return { elections: list.map(summary), states: Object.keys(st).sort() };
+      return { elections: list.map(summary), states: Object.keys(st).sort(), totalElections: db.elections.length };
     }
 
     /* elections create */
@@ -903,10 +1014,16 @@
 
     if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'overview') {
       var users = db.users.map(function (u) {
+        syncUserBan(u);
         var created = db.elections.filter(function (e) { return e.creatorId === u.id; });
         var voted = db.elections.filter(function (e) { return e.votes[u.id]; });
+        var modInfo = moderationInfo(u);
         return {
-          id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active', hasPassword: !!u.pwHash,
+          id: u.id, name: u.name, username: u.username || null, accountStatus: modInfo.accountStatus,
+          deletedAt: modInfo.deletedAt, deletedBy: modInfo.deletedBy, deleteReason: modInfo.deleteReason,
+          banType: modInfo.banType, bannedAt: modInfo.bannedAt, banUntil: modInfo.banUntil, banReason: modInfo.banReason, banBy: modInfo.banBy,
+          moderationHistory: Array.isArray(u.moderationHistory) ? u.moderationHistory.slice(-5) : [],
+          hasPassword: !!u.pwHash,
           createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null, isDemo: !!u.isDemo,
           electionsCreated: created.length, votesCast: voted.length,
           deviceCount: Object.keys(u.devices || {}).length,
@@ -974,6 +1091,47 @@
       };
     }
 
+    if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'users' && parts[3] && parts[4] === 'moderate' && parts.length === 5) {
+      var modUser = findUserById(clean(parts[3], 40));
+      if (!modUser) throw err('यह खाता नहीं मिला। सूची ताज़ा करके फिर देखें।', 404);
+      syncUserBan(modUser);
+      var modAction = clean(body.action, 30);
+      var modReason = clean(body.reason, 200);
+      var modNow = Date.now();
+      var modStatus = modUser.deletedAt ? 'deleted' : (modUser.accountStatus || 'active');
+      if (['ban-temporary', 'ban-permanent', 'unban', 'delete'].indexOf(modAction) === -1) throw err('खाता कार्रवाई सही नहीं है।', 400);
+      if (modStatus === 'deleted') throw err('यह खाता पहले ही हटाया जा चुका है।', 409, 'ACCOUNT_DELETED');
+      if (modStatus === 'replaced') throw err('यह पुराना बदला हुआ (replaced) खाता है — इसका login पहले ही बंद है। नए खाते पर कार्रवाई करें।', 409, 'ACCOUNT_REPLACED');
+      var modMessage = '';
+      if (modAction === 'ban-temporary') {
+        var modDays = Number(body.days);
+        if (!isFinite(modDays) || Math.floor(modDays) !== modDays || modDays < 1 || modDays > 3650) throw err('रोक के दिन सही लिखें — 1 से 3650 दिनों के बीच पूरा नंबर होना चाहिए।', 400);
+        modUser.accountStatus = 'banned'; modUser.banType = 'temporary'; modUser.bannedAt = modNow;
+        modUser.banUntil = modNow + modDays * 864e5; modUser.banReason = modReason; modUser.banBy = 'developer'; modUser.tokens = {};
+        noteUserModeration(modUser, modAction, modReason, modUser.banUntil, 'developer');
+        modMessage = 'खाते पर ' + modDays + ' दिन की रोक लग गई — ' + formatBanDate(modUser.banUntil) + ' तक login बंद रहेगा।';
+      } else if (modAction === 'ban-permanent') {
+        modUser.accountStatus = 'banned'; modUser.banType = 'permanent'; modUser.bannedAt = modNow;
+        modUser.banUntil = null; modUser.banReason = modReason; modUser.banBy = 'developer'; modUser.tokens = {};
+        noteUserModeration(modUser, modAction, modReason, null, 'developer');
+        modMessage = 'खाते पर स्थायी रोक लग गई। आपके द्वारा रोक हटाए जाने तक login बंद रहेगा।';
+      } else if (modAction === 'unban') {
+        if (modStatus !== 'banned') throw err('इस खाते पर अभी कोई रोक लगी ही नहीं है।', 409, 'ACCOUNT_NOT_BANNED');
+        modUser.accountStatus = 'active'; modUser.unbannedAt = modNow; clearBanFields(modUser); modUser.tokens = {};
+        noteUserModeration(modUser, modAction, modReason, null, 'developer');
+        modMessage = 'रोक हट गई — खाता फिर चालू है। उपयोगकर्ता को username + PIN से दोबारा login करना होगा।';
+      } else if (modAction === 'delete') {
+        if (body.confirm !== true) throw err('खाता हटाने की पुष्टि ज़रूरी है।', 400);
+        softDeleteAccount(modUser, 'developer', modReason);
+        noteUserModeration(modUser, modAction, modReason, null, 'developer');
+        modMessage = 'खाता हटा दिया गया। login और credential बंद हैं; पुराने चुनाव/वोटों की गिनती बिना नाम के सुरक्षित रहेगी।';
+      }
+      save();
+      var modInfoOut = moderationInfo(modUser);
+      modInfoOut.id = modUser.id; modInfoOut.name = modUser.name; modInfoOut.username = modUser.username || null;
+      return { ok: true, action: modAction, message: modMessage, user: modInfoOut };
+    }
+
     if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'elections' && parts[3]) {
       var e2 = findElection(parts[3]);
       if (!e2) throw err('चुनाव नहीं मिला।', 404);
@@ -998,6 +1156,7 @@
       }).sort(function (a, b) { return b.at - a.at; });
       var outE = full(e2, null);
       outE.results = tally(e2);
+      outE.totalVotes = outE.results.totalVotes;
       outE.results.resultsHidden = false;
       outE.resultsHidden = false;
       outE.resultsVisible = true;
@@ -1019,7 +1178,7 @@
           decisionNote: a.decisionNote || '', resultingUserId: a.resultingUserId || null, replacedUserId: a.replacedUserId || null,
           conflicts: (a.conflictUserIds || []).map(function (id) { return findUserById(id); }).filter(Boolean).map(function (u) {
             return {
-              id: u.id, name: u.name, username: u.username || null, accountStatus: u.accountStatus || 'active',
+              id: u.id, name: u.name, username: u.username || null, accountStatus: moderationInfo(u).accountStatus, deletedAt: u.deletedAt || null, banType: u.accountStatus === 'banned' ? (u.banType || 'permanent') : null, banUntil: u.accountStatus === 'banned' && u.banType === 'temporary' ? (Number(u.banUntil) || null) : null, banReason: u.accountStatus === 'banned' ? (u.banReason || '') : '',
               hasPassword: !!u.pwHash, createdAt: u.createdAt, lastLoginAt: u.lastLoginAt || null,
               electionsCreated: db.elections.filter(function (e) { return e.creatorId === u.id; }).length,
               votesCast: db.elections.filter(function (e) { return e.votes && e.votes[u.id]; }).length
@@ -1054,6 +1213,7 @@
       if (dapp.kind === 'lost-pin-recovery') {
         var lt = (dapp.targetUserId && findUserById(dapp.targetUserId)) || findUserByUsername(dapp.desiredUsername);
         if (!lt) throw err('जिस खाते (@' + dapp.desiredUsername + ') की वापसी माँगी गई थी वह अब नहीं मिला — यह आवेदन अस्वीकार करें।', 404);
+        if (!isActiveUser(lt)) throw err(lt.accountStatus === 'banned' ? 'यह खाता अभी रोक (ban) में है — PIN reset करने से पहले यूज़र्स सूची से रोक हटाएँ।' : 'यह खाता अब चालू नहीं है — PIN वापसी मंज़ूर नहीं हो सकती। आवेदन अस्वीकार करें।', 409, 'ACCOUNT_NOT_ACTIVE');
         lt.pwHash = dapp.pwHash; lt.recoveryHash = dapp.recoveryHash;
         lt.accountStatus = 'active'; lt.tokens = {};
         if (!lt.devices) lt.devices = {};
@@ -1069,6 +1229,7 @@
       var dconflicts = (dapp.conflictUserIds || []).map(function (id) { return findUserById(id); }).filter(isActiveUser);
       var target = replaceId ? findUserById(replaceId) : null;
       if (replaceId && !target) throw err('बदला जाने वाला पुराना खाता नहीं मिला।');
+      if (target && !isActiveUser(target)) throw err(target.accountStatus === 'banned' ? 'बदला जाने वाला खाता अभी रोक (ban) में है — पहले यूज़र्स सूची से रोक हटाएँ।' : 'बदला जाने वाला पुराना खाता अब चालू नहीं है।', 409, 'ACCOUNT_NOT_ACTIVE');
       if (!target && dconflicts.length && dmode !== 'additional') throw err('इस फ़ोन पर पुराना खाता मौजूद है। कृपया चुनें: पुराना खाता बदलें (उसका डेटा नए username में आएगा) या अलग दूसरा खाता बनाएँ।', 400, 'REPLACE_CHOICE_REQUIRED');
       var owner = findUserByUsername(dapp.desiredUsername);
       if (owner && target && owner.id === target.id) {

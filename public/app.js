@@ -1506,6 +1506,27 @@ function bindLoginCard(onDone) {
   });
 }
 
+/* चल रहे चुनाव हर सार्वजनिक सूची में सबसे ऊपर रहेंगे। चलते चुनावों में
+   समाप्ति के सबसे नज़दीक वाला पहले; “new” क्रम में नया पहले। समाप्त
+   चुनावों में ही वोटों के आधार पर क्रम लग सकता है, क्योंकि चलते चुनाव
+   की कुल संख्या सार्वजनिक नहीं है। */
+function sortElectionsLiveFirst(items, mode = 'live') {
+  return (items || []).slice().sort((a, b) => {
+    const rankDiff = (a && a.closed ? 1 : 0) - (b && b.closed ? 1 : 0);
+    if (rankDiff) return rankDiff;
+    if (mode === 'votes' && a.closed && b.closed) {
+      const diff = (Number(b.totalVotes) || 0) - (Number(a.totalVotes) || 0);
+      if (diff) return diff;
+    }
+    if (mode !== 'new' && !a.closed && !b.closed) {
+      const ae = Number(a.endsAt) > 0 ? Number(a.endsAt) : Number.POSITIVE_INFINITY;
+      const be = Number(b.endsAt) > 0 ? Number(b.endsAt) : Number.POSITIVE_INFINITY;
+      if (ae !== be) return ae - be;
+    }
+    return (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
+  });
+}
+
 function electionCard(e) {
   const statusBadge = e.closed
     ? '<span class="badge closed">परिणाम घोषित</span>'
@@ -1531,7 +1552,7 @@ function electionCard(e) {
     <div class="ecard-foot">
       <div class="ecard-votes">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><rect x="3" y="4" width="18" height="16" rx="3"/></svg>
-        <b>${fmt(e.totalVotes)}</b> वोट · ${e.candidateCount} उम्मीदवार
+        ${e.closed ? `<b>${fmt(e.totalVotes)}</b> वोट` : '<b>🔒</b> वोट संख्या छिपी'} · ${e.candidateCount} उम्मीदवार
       </div>
       <a class="btn btn-primary btn-sm" href="#/e/${e.code}">${e.closed ? 'परिणाम देखें' : 'वोट करें'}</a>
     </div>
@@ -1666,7 +1687,7 @@ function heroElectionHTML(e, detail) {
     </div>
     ${body}
     <div class="ballot-foot">
-      <span>${fmt((detail && detail.totalVotes) || e.totalVotes || 0)} वोट</span>
+      <span>${closed ? fmt((detail && detail.totalVotes) || e.totalVotes || 0) + ' वोट पड़े' : 'वोट संख्या छिपी'}</span>
       <span>${hidden ? 'उम्मीदवारों की गिनती छिपी' : esc([e.gram, e.district].filter(Boolean).join(', '))}</span>
     </div>
   </div>`;
@@ -1676,7 +1697,8 @@ async function fillHeroVisual(elections) {
   const box = document.getElementById('heroVisual');
   if (!box) return;
 
-  const live = (elections || []).find((e) => !e.closed) || (elections || [])[0];
+  const ordered = sortElectionsLiveFirst(elections || []);
+  const live = ordered[0];
   if (!live) {
     box.innerHTML = `
       <div class="floaty tl">
@@ -1790,22 +1812,13 @@ async function renderHome() {
   setActiveNav('home');
   clearPoll();
   app.innerHTML = HERO + `
-  <div class="wrap stats-strip">
-    <div class="stats-grid">
-      <div class="stat"><b id="stElections">—</b><span>कुल चुनाव</span></div>
-      <div class="stat"><b id="stVotes">—</b><span>पड़े हुए वोट</span></div>
-      <div class="stat"><b id="stCands">—</b><span>उम्मीदवार</span></div>
-      <div class="stat"><b id="stUsers">—</b><span>पंजीकृत मतदाता</span></div>
-    </div>
-  </div>
-
   <section class="section tight">
     <div class="wrap">
       <div class="section-head">
         <div>
           <div class="kicker">लाइव चुनाव</div>
           <h2>हाल में बने चुनाव</h2>
-          <p>किसी भी चुनाव पर जाकर वोट कीजिए — या अपना नया चुनाव शुरू कीजिए।</p>
+          <p>चल रहे चुनाव सबसे ऊपर हैं — किसी भी चुनाव पर जाकर वोट कीजिए या अपना नया चुनाव शुरू कीजिए।</p>
         </div>
         <div class="open-by-code">
           <form id="openByCode" autocomplete="off">
@@ -1840,17 +1853,13 @@ async function renderHome() {
   fillHeroVisual(null);   // turant neutral card (khali jagah na dikhe)
 
   try {
-    const [stats, list] = await Promise.all([api('/api/stats'), api('/api/elections')]);
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = fmt(v); };
-    set('stElections', stats.elections);
-    set('stVotes', stats.votes);
-    set('stCands', stats.candidates);
-    set('stUsers', stats.users);
-    fillHeroVisual(list.elections);
+    const list = await api('/api/elections');
+    const orderedElections = sortElectionsLiveFirst(list.elections);
+    fillHeroVisual(orderedElections);
     const box = document.getElementById('recentList');
     if (box) {
-      box.innerHTML = list.elections.length
-        ? list.elections.slice(0, 6).map(electionCard).join('')
+      box.innerHTML = orderedElections.length
+        ? orderedElections.slice(0, 6).map(electionCard).join('')
         : emptyLiveHTML({ onHome: true });
     }
   } catch (e) {
@@ -1872,7 +1881,11 @@ async function renderExplore() {
     <div class="wrap">
       <div class="kicker">सारे चुनाव</div>
       <h2 style="font-size:clamp(26px,3.4vw,36px);letter-spacing:-.025em">चुनाव खोजें</h2>
-      <p class="muted" style="margin:8px 0 24px;max-width:44em">गाँव, ज़िला, राज्य, चुनाव कोड या नाम से खोजिए और वोट कीजिए।</p>
+      <p class="muted" style="margin:8px 0 14px;max-width:44em">गाँव, ज़िला, राज्य, चुनाव कोड या नाम से खोजिए और वोट कीजिए।</p>
+      <div style="margin:0 0 22px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="badge">कुल चुनाव: <b id="exploreTotalElections">—</b></span>
+        <span class="muted small">चल रहे चुनाव सबसे ऊपर दिखते हैं</span>
+      </div>
 
       <div class="filters">
         <div class="search-wrap">
@@ -1881,8 +1894,9 @@ async function renderExplore() {
         </div>
         <select id="stateFilter" aria-label="राज्य चुनें"><option value="">सभी राज्य</option></select>
         <select id="sortBy" aria-label="क्रम">
-          <option value="new">नए पहले</option>
-          <option value="votes">ज़्यादा वोट पहले</option>
+          <option value="live">लाइव पहले · समाप्ति नज़दीक पहले</option>
+          <option value="new">लाइव पहले · नए पहले</option>
+          <option value="votes">समाप्त चुनावों में ज़्यादा वोट पहले</option>
         </select>
       </div>
 
@@ -1896,6 +1910,8 @@ async function renderExplore() {
 
   try {
     if (!exploreCache) exploreCache = await api('/api/elections');
+    const totalEl = document.getElementById('exploreTotalElections');
+    if (totalEl) totalEl.textContent = fmt(exploreCache.totalElections != null ? exploreCache.totalElections : exploreCache.elections.length);
     const stateSel = document.getElementById('stateFilter');
     exploreCache.states.forEach((s) => {
       const o = document.createElement('option');
@@ -1910,7 +1926,7 @@ async function renderExplore() {
       let items = exploreCache.elections.slice();
       if (st) items = items.filter((e) => e.state === st);
       if (q) items = items.filter((e) => [e.title, e.gram, e.district, e.state, e.type, e.code].join(' ').toLowerCase().includes(q));
-      if (sort === 'votes') items.sort((a, b) => b.totalVotes - a.totalVotes);
+      items = sortElectionsLiveFirst(items, sort);
       listBox.innerHTML = items.map(electionCard).join('');
       const nothingAtAll = !exploreCache.elections.length;
       document.getElementById('emptyBox').innerHTML = items.length ? '' : nothingAtAll
@@ -2700,16 +2716,16 @@ function resultsHTML(d) {
     return `
       <div class="status-banner warn"><div class="sb-ico">${ICON.lock}</div><div>
         <h4>उम्मीदवारों की गिनती अभी छिपी है</h4>
-        <p>मतदान चलने के दौरान लाइव गिनती केवल डेवलपर देख सकता है। ${d.endsAt ? `परिणाम <b>${esc(fullDate(d.endsAt))}</b> पर अपने आप सबके लिए खुल जाएगा।` : 'चुनाव बंद होते ही परिणाम सबके लिए खुल जाएगा।'}</p>
+        <p>मतदान चलने के दौरान कुल वोट संख्या और उम्मीदवारों की गिनती केवल डेवलपर देख सकता है। ${d.endsAt ? `परिणाम <b>${esc(fullDate(d.endsAt))}</b> पर अपने आप सबके लिए खुल जाएगा।` : 'चुनाव बंद होते ही परिणाम सबके लिए खुल जाएगा।'}</p>
       </div></div>
       <div class="total-strip">
-        <div class="ts-item"><b>${fmt(total)}</b><span>कुल वोट</span></div>
+        <div class="ts-item"><b>🔒</b><span>कुल वोट (छिपे)</span></div>
         <div class="divider"></div>
         <div class="ts-item"><b>${d.candidates.length}</b><span>उम्मीदवार</span></div>
         <div class="divider"></div>
         <div class="ts-item"><b>छिपा</b><span>परिणाम</span></div>
         <div class="divider"></div>
-        <div class="ts-item" style="margin-left:auto"><span class="live-note" id="liveNote">कुल वोट संख्या अपडेट होगी · उम्मीदवारों की गिनती छिपी</span></div>
+        <div class="ts-item" style="margin-left:auto"><span class="live-note" id="liveNote">कुल वोट और उम्मीदवारों की गिनती मतदान समाप्त होने पर दिखेगी</span></div>
       </div>
       <div class="results">${hiddenRows}</div>`;
   }
@@ -3264,7 +3280,7 @@ function electionHTML(d) {
       <h1>${esc(d.title)}</h1>
       <div class="ehead-meta">
         <span><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1116 0z"/><circle cx="12" cy="10" r="3"/></svg> ${esc(d.gram)} · ${esc(d.district)} · ${esc(d.state)}</span>
-        <span>${ICON.ballot} <b id="headVotes">${fmt(d.totalVotes)}</b> वोट पड़े</span>
+        <span>${ICON.ballot} ${d.closed ? `<b id="headVotes">${fmt(d.totalVotes)}</b> वोट पड़े` : '<b id="headVotes">🔒</b> वोट संख्या छिपी'}</span>
         <span>${ICON.clock} ${timeAgo(d.createdAt)}</span>
         ${d.endsAt && !d.closed ? `<span class="ehead-timer">⏳ <b data-left="${d.remainingMs || 0}">${esc(fmtLeft(d.remainingMs || 0))}</b></span>` : ''}
         ${d.endsAt && d.closed ? `<span class="ehead-timer done">समाप्त ${esc(shortDate(d.endsAt))}</span>` : ''}
@@ -3360,7 +3376,7 @@ async function renderElection(code, opts = {}) {
 
   if (!d.closed) {
     let noteMode = 'live';
-    const noteText = () => (noteMode === 'live' ? 'कुल वोट संख्या अपडेट होगी · उम्मीदवारों की गिनती छिपी' : 'कुल वोट संख्या हर कुछ सेकंड में अपडेट होगी · गिनती छिपी');
+    const noteText = () => (noteMode === 'live' ? 'कुल वोट और उम्मीदवारों की गिनती मतदान समाप्त होने पर दिखेगी' : 'समाप्ति की स्थिति जाँच रहे हैं · गिनती छिपी');
     const setNote = (txt) => {
       const n = document.getElementById('liveNote');
       if (n) n.textContent = txt;
@@ -3376,7 +3392,7 @@ async function renderElection(code, opts = {}) {
       // resultsBox ke andar hi liveNote hai — dobara set karo
       setNote(noteText());
       const hv = document.getElementById('headVotes');
-      if (hv) hv.textContent = fmt(fresh.totalVotes);
+      if (hv) hv.textContent = fresh.closed ? fmt(fresh.totalVotes) : '🔒';
       const liveDot = document.getElementById('liveDot');
       if (liveDot) liveDot.classList.add('on');
     };
@@ -3927,7 +3943,7 @@ function settingsAppearanceHTML() {
     <div class="section-title"><h2 style="font-size:18px">सुविधा</h2></div>
     <ul class="info-list">
       <li><b>भाषा</b><span>हिंदी (देवनागरी)</span></li>
-      <li><b>मतदान जानकारी</b><span>कुल वोट संख्या अपडेट होती है; उम्मीदवारों की गिनती अंत में खुलती है</span></li>
+      <li><b>मतदान जानकारी</b><span>कुल वोट और उम्मीदवारों की गिनती मतदान समाप्त होने पर खुलती है</span></li>
       <li><b>फ़ॉन्ट साइज़</b><span>साइट के साथ (मोबाइल-फ्रेंडली)</span></li>
     </ul>
   </div>`;
@@ -4045,11 +4061,11 @@ function settingsElectionsHTML(data) {
           </div>
           <h3>${esc(e.title)}</h3>
           <p class="muted small">${esc(e.gram)} · ${esc(e.district)} · ${esc(e.state)} · ${esc(timeAgo(e.createdAt))}</p>
-          <p class="my-leading">${!e.closed ? (e.totalVotes ? `परिणाम मतदान समाप्त होने पर दिखेगा · अभी ${fmt(e.totalVotes)} वोट पड़े हैं` : 'परिणाम मतदान समाप्त होने पर दिखेगा · अभी कोई वोट नहीं पड़ा') : (lead && lead.votes ? `अंतिम गिनती में सबसे अधिक: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'इस चुनाव में कोई वोट नहीं पड़ा')}</p>
+          <p class="my-leading">${!e.closed ? 'कुल वोट और परिणाम मतदान समाप्त होने पर दिखेंगे' : (lead && lead.votes ? `अंतिम गिनती में सबसे अधिक: <b>${esc(lead.name)}</b> — ${fmt(lead.votes)} वोट (${lead.percent}%)` : 'इस चुनाव में कोई वोट नहीं पड़ा')}</p>
           ${e.endsAt ? `<p class="my-timer">${ICON.clock} ${e.closed ? 'समाप्त: ' + esc(fullDate(e.endsAt)) : '<b data-count-to="' + (e.remainingMs || 0) + '">' + esc(fmtLeft(e.remainingMs || 0)) + '</b> · समाप्ति ' + esc(fullDate(e.endsAt))}</p>` : ''}
         </div>
         <div class="my-item-actions">
-          <div class="my-votes"><b>${fmt(e.totalVotes)}</b><span>वोट</span></div>
+          <div class="my-votes"><b>${e.closed ? fmt(e.totalVotes) : '🔒'}</b><span>${e.closed ? 'वोट' : 'वोट छिपे'}</span></div>
           <a class="btn btn-ghost btn-sm" href="#/e/${e.code}">देखें</a>
           <button class="btn ${e.closed ? 'btn-ghost' : 'btn-danger'} btn-sm" data-manage="${e.code}" data-action="${e.closed ? 'reopen' : 'close'}"
             ${(!e.closed && !e.canDelete) || (e.closed && e.timeUp) ? 'disabled title="' + (e.timeUp ? 'समय पूरा — दोबारा नहीं खुलेगा' : 'तय समय से पहले बंद नहीं कर सकते') + '"' : ''}>${e.closed ? (e.timeUp ? 'समाप्त' : 'फिर खोलें') : 'समाप्त करें'}</button>
@@ -4446,12 +4462,12 @@ function devApplicationsHTML() {
           <div style="margin-top:9px">
             <b>इसी फ़ोन/पहचान से जुड़े पुराने खाते:</b>
             ${a.conflicts.map((u, i) => `
-              <label style="display:block;margin-top:7px;cursor:${a.status === 'pending' ? 'pointer' : 'default'}">
-                ${a.status === 'pending' ? '<input type="radio" name="appmode-' + esc(a.id) + '" value="replace:' + esc(u.id) + '"' + (i === 0 ? ' checked' : '') + '> <b>पुराने खाते को बदलें:</b> ' : '• '}
+              <label style="display:block;margin-top:7px;cursor:${a.status === 'pending' && devAccountStatusInfo(u).status === 'active' ? 'pointer' : 'default'}">
+                ${a.status === 'pending' && devAccountStatusInfo(u).status === 'active' ? '<input type="radio" name="appmode-' + esc(a.id) + '" value="replace:' + esc(u.id) + '"' + (a.conflicts.findIndex((x) => devAccountStatusInfo(x).status === 'active') === i ? ' checked' : '') + '> <b>पुराने खाते को बदलें:</b> ' : '• '}
                 ${esc(u.name)} ${u.username ? '(@' + esc(u.username) + ')' : '(username नहीं)'}
-                <span class="muted small">· ${u.electionsCreated} चुनाव बनाए · ${u.votesCast} वोट · आख़िरी लॉगिन ${esc(timeAgo(u.lastLoginAt))} · ${u.hasPassword ? 'पासवर्ड/PIN लगा' : 'बिना-पासवर्ड पुराना'}</span>
+                <span class="muted small">· ${u.electionsCreated} चुनाव बनाए · ${u.votesCast} वोट · आख़िरी लॉगिन ${esc(timeAgo(u.lastLoginAt))} · ${u.hasPassword ? 'पासवर्ड/PIN लगा' : 'बिना-पासवर्ड पुराना'}${devAccountStatusInfo(u).status === 'banned' ? ' · <b>रोक लगी है — replace नहीं होगा</b>' : devAccountStatusInfo(u).status === 'deleted' ? ' · <b>हटाया गया — replace नहीं होगा</b>' : devAccountStatusInfo(u).status !== 'active' ? ' · <b>चालू खाता नहीं</b>' : ''}</span>
               </label>`).join('')}
-            ${a.status === 'pending' ? '<label style="display:block;margin-top:7px;cursor:pointer"><input type="radio" name="appmode-' + esc(a.id) + '" value="additional"> <b>अलग दूसरा खाता बनाएँ</b> <span class="muted small">(साझा फ़ोन का दूसरा सदस्य; पुराना खाता वैसा ही रहेगा)</span></label>' : ''}
+            ${a.status === 'pending' ? '<label style="display:block;margin-top:7px;cursor:pointer"><input type="radio" name="appmode-' + esc(a.id) + '" value="additional"' + (a.conflicts.some((x) => devAccountStatusInfo(x).status === 'active') ? '' : ' checked') + '> <b>अलग दूसरा खाता बनाएँ</b> <span class="muted small">(साझा फ़ोन का दूसरा सदस्य; पुराना खाता वैसा ही रहेगा)</span></label>' : ''}
           </div>` : '<div class="muted small" style="margin-top:8px">इस फ़ोन से जुड़ा कोई पुराना खाता सर्वर को नहीं मिला — कारण देखकर ही निर्णय लें।</div>'}
 
         ${a.status === 'pending' ? `
@@ -4563,7 +4579,7 @@ function startDevLive() {
     while (list.children.length > 12) list.removeChild(list.lastChild);
     scheduleDevRefresh();
   });
-  ['election-status', 'user-deleted', 'account-application', 'account-application-decision'].forEach((evName) => {
+  ['election-status', 'user-deleted', 'user-moderated', 'account-application', 'account-application-decision'].forEach((evName) => {
     devLiveSource.addEventListener(evName, () => scheduleDevRefresh());
   });
   devLiveSource.onopen = () => {
@@ -4977,6 +4993,32 @@ function devSummaryHTML() {
   </div>`;
 }
 
+function devAccountStatusInfo(u) {
+  const banUntil = Number((u && u.banUntil) || 0) || null;
+  let status = u && u.deletedAt ? 'deleted' : ((u && u.accountStatus) || 'active');
+  if (status === 'banned' && u && u.banType === 'temporary' && banUntil && Date.now() >= banUntil) status = 'active';
+  return { status, banUntil };
+}
+
+function devAccountStatusHTML(u) {
+  const info = devAccountStatusInfo(u);
+  if (info.status === 'active') return '<span class="badge live">चालू खाता</span>';
+  if (info.status === 'banned') {
+    const until = u.banType === 'temporary' && info.banUntil
+      ? '<div class="muted small">' + esc(fullDate(info.banUntil)) + ' तक</div>'
+      : '<div class="muted small">स्थायी रोक</div>';
+    const reason = u.banReason ? '<div class="muted small" style="max-width:220px;white-space:normal">कारण: ' + esc(u.banReason) + '</div>' : '';
+    return '<span class="badge closed">रोक लगी है</span>' + until + reason;
+  }
+  if (info.status === 'deleted') {
+    const when = u.deletedAt ? '<div class="muted small">' + esc(fullDate(u.deletedAt)) + '</div>' : '';
+    const by = u.deletedBy === 'developer' ? '<div class="muted small">डेवलपर द्वारा हटाया</div>' : (u.deletedBy === 'self' ? '<div class="muted small">उपयोगकर्ता ने खुद हटाया</div>' : '');
+    return '<span class="badge closed">हटाया गया</span>' + when + by;
+  }
+  if (info.status === 'replaced') return '<span class="badge closed">पुराना बदला खाता</span><div class="muted small">login बंद</div>';
+  return '<span class="badge closed">' + esc(info.status) + '</span>';
+}
+
 function devUsersHTML() {
   return `
   <div class="dev-card">
@@ -4989,16 +5031,20 @@ function devUsersHTML() {
     </div>
     <div class="table-wrap">
       <table class="dev-table" id="devUsersTable">
-        <thead><tr><th>नाम / Username</th><th>जुड़े</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस</th><th>आख़िरी लॉगिन</th></tr></thead>
+        <thead><tr><th>नाम / Username</th><th>जुड़े</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस</th><th>आख़िरी लॉगिन</th><th>स्थिति / खाता नियंत्रण</th></tr></thead>
         <tbody>
           ${devData.users.map((u) => `
             <tr data-name="${esc((u.name + ' ' + (u.username || '')).toLowerCase())}">
-              <td><b>${esc(u.name)}</b>${u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}<div class="muted small">${u.username ? '@' + esc(u.username) : 'username नहीं'}${u.accountStatus && u.accountStatus !== 'active' ? ' · ' + esc(u.accountStatus) : ''}</div></td>
+              <td><b>${esc(u.name)}</b>${u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}<div class="muted small">${u.username ? '@' + esc(u.username) : 'username नहीं'}</div></td>
               <td class="nowrap">${esc(timeAgo(u.createdAt))}</td>
               <td>${u.electionsCreated ? `<button class="chip-btn" data-user-elections="${esc(u.id)}">${u.electionsCreated}</button>` : '0'}</td>
               <td>${u.votesCast}</td>
               <td>${u.deviceCount}</td>
               <td class="nowrap">${esc(timeAgo(u.lastLoginAt))}</td>
+              <td class="nowrap">
+                ${devAccountStatusHTML(u)}
+                ${['active', 'banned'].includes(devAccountStatusInfo(u).status) ? `<div style="margin-top:7px"><button class="btn btn-ghost btn-sm" data-user-moderate="${esc(u.id)}">खाता नियंत्रण</button></div>` : ''}
+              </td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -5191,8 +5237,16 @@ function bindDevBody() {
   const exportUsers = document.getElementById('exportUsers');
   if (exportUsers) {
     exportUsers.addEventListener('click', () => {
-      const rows = [['नाम', 'Username', 'स्थिति', 'जुड़े', 'बनाए चुनाव', 'दिए वोट', 'डिवाइस', 'डेमो']];
-      devData.users.forEach((u) => rows.push([u.name, u.username || '', u.accountStatus || 'active', fullDate(u.createdAt), u.electionsCreated, u.votesCast, u.deviceCount, u.isDemo ? 'हाँ' : 'नहीं']));
+      const rows = [['नाम', 'Username', 'स्थिति', 'रोक कब तक', 'रोक/हटाने का कारण', 'जुड़े', 'बनाए चुनाव', 'दिए वोट', 'डिवाइस', 'डेमो']];
+      devData.users.forEach((u) => {
+        const info = devAccountStatusInfo(u);
+        rows.push([
+          u.name, u.username || '', info.status,
+          info.status === 'banned' ? (u.banType === 'temporary' && info.banUntil ? fullDate(info.banUntil) : 'स्थायी') : '',
+          u.banReason || u.deleteReason || '',
+          fullDate(u.createdAt), u.electionsCreated, u.votesCast, u.deviceCount, u.isDemo ? 'हाँ' : 'नहीं',
+        ]);
+      });
       downloadFile('janmat-users.csv', '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
     });
   }
@@ -5239,6 +5293,10 @@ function bindDevBody() {
         ${list.map((e) => `<tr><td><span class="code-chip">${e.code}</span></td><td>${esc(e.title)}</td><td>${fmt(e.totalVotes)}</td><td>${e.closed ? 'समाप्त' : 'चालू'}</td></tr>`).join('')}
         </tbody></table>` : '<p class="muted">कोई चुनाव नहीं</p>'));
     });
+  });
+
+  $$('[data-user-moderate]').forEach((btn) => {
+    btn.addEventListener('click', () => openDevUserModeration(btn.dataset.userModerate));
   });
 
   $$('[data-e-detail]').forEach((btn) => {
@@ -5289,6 +5347,104 @@ function bindDevBody() {
       }
     });
   });
+}
+
+function openDevUserModeration(userId) {
+  const u = devData && Array.isArray(devData.users) ? devData.users.find((x) => x.id === userId) : null;
+  if (!u) { toast('यह खाता सूची में नहीं मिला — ताज़ा करें।', 'err'); return; }
+  const info = devAccountStatusInfo(u);
+  if (!['active', 'banned'].includes(info.status)) {
+    toast('इस खाते पर अब कोई कार्रवाई उपलब्ध नहीं है।', 'err');
+    return;
+  }
+  const banned = info.status === 'banned';
+  openDevModal(`<h3>खाता नियंत्रण</h3>
+    <p style="margin-top:2px"><b>${esc(u.name)}</b>${u.username ? ' <span class="code-chip">@' + esc(u.username) + '</span>' : ' <span class="muted">(username नहीं)</span>'}</p>
+    <p class="muted" style="margin-top:6px">मौजूदा स्थिति: ${devAccountStatusHTML(u)}</p>
+
+    <label for="devModReason" style="display:block;margin-top:16px"><b>कारण</b> <span class="muted small">(वैकल्पिक — रोक लगने पर उपयोगकर्ता को login संदेश में दिख सकता है)</span></label>
+    <input id="devModReason" type="text" maxlength="200" value="${esc(u.banReason || '')}" placeholder="जैसे: गलत/फ़र्ज़ी खाता, नियम तोड़ना, दुरुपयोग…" style="margin-top:7px;width:100%" />
+
+    <label for="devModDays" style="display:block;margin-top:14px"><b>अस्थायी रोक के दिन</b> <span class="muted small">(1–3650 दिन; अवधि पूरी होते ही खाता अपने आप चालू होगा)</span></label>
+    <input id="devModDays" type="number" inputmode="numeric" min="1" max="3650" step="1" value="7" style="margin-top:7px;width:150px" />
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:18px">
+      <button class="btn btn-danger" id="devBanTempBtn">${banned ? 'रोक की अवधि बदलें' : 'इतने दिन रोकें'}</button>
+      <button class="btn btn-danger" id="devBanPermBtn">स्थायी रोक लगाएँ</button>
+      ${banned ? '<button class="btn btn-primary" id="devUnbanBtn">रोक हटाएँ</button>' : ''}
+      <button class="btn btn-danger" id="devDeleteUserBtn">खाता हटाएँ</button>
+    </div>
+
+    <div class="alert bad" style="margin-top:16px">
+      <b>ध्यान दें:</b> रोक लगाते या खाता हटाते ही इस खाते के सभी login session तुरंत बंद हो जाएँगे।
+      <b>खाता हटाना वापस नहीं होगा</b> — PIN/रिकवरी भी बंद हो जाएगी और वही username फिर किसी को नहीं मिलेगा।
+      पुराने चुनाव और वोटों की गिनती परिणामों की सच्चाई के लिए बिना नाम के सुरक्षित रहेगी।
+      Developer द्वारा हटाए खाते के उसी जुड़े फ़ोन से सीधा नया खाता भी नहीं बनेगा; वापसी के लिए developer-approved appeal लगेगा। अगर खाता बाद में फिर चालू करना पड़ सकता है, तो हटाने की बजाय <b>स्थायी रोक</b> चुनें।
+    </div>`);
+
+  const buttons = ['devBanTempBtn', 'devBanPermBtn', 'devUnbanBtn', 'devDeleteUserBtn']
+    .map((id) => document.getElementById(id)).filter(Boolean);
+  const setBusy = (busy) => buttons.forEach((b) => { b.disabled = busy; });
+  const disarm = (btn) => {
+    if (!btn) return;
+    clearTimeout(btn._modTimer);
+    btn.dataset.armed = '';
+    btn.classList.remove('armed');
+    if (btn.dataset.label) btn.textContent = btn.dataset.label;
+  };
+
+  const run = async (action, btn) => {
+    const reasonEl = document.getElementById('devModReason');
+    const daysEl = document.getElementById('devModDays');
+    const reason = reasonEl ? reasonEl.value.trim() : '';
+    const days = daysEl ? Number(daysEl.value) : NaN;
+    if (action === 'ban-temporary' && (!Number.isInteger(days) || days < 1 || days > 3650)) {
+      toast('रोक के दिन सही लिखें — 1 से 3650 के बीच पूरा नंबर होना चाहिए।', 'err');
+      if (daysEl) daysEl.focus();
+      return;
+    }
+    const needsConfirm = action !== 'unban';
+    if (needsConfirm && btn && btn.dataset.armed !== '1') {
+      buttons.forEach((b) => { if (b !== btn) disarm(b); });
+      btn.dataset.armed = '1';
+      btn.dataset.label = btn.textContent;
+      btn.textContent = action === 'delete' ? 'पक्का खाता हटाएँ?' : 'पक्का रोक लगाएँ?';
+      btn.classList.add('armed');
+      clearTimeout(btn._modTimer);
+      btn._modTimer = setTimeout(() => disarm(btn), 7000);
+      return;
+    }
+    if (btn) clearTimeout(btn._modTimer);
+    setBusy(true);
+    try {
+      const res = await api('/api/dev/users/' + encodeURIComponent(u.id) + '/moderate', {
+        method: 'POST',
+        body: {
+          action,
+          days: action === 'ban-temporary' ? days : undefined,
+          reason: action === 'unban' ? '' : reason,
+          confirm: action === 'delete',
+        },
+      });
+      toast(res.message || 'कार्रवाई हो गई।', 'ok');
+      const closeBtn = document.getElementById('devModalClose');
+      if (closeBtn) closeBtn.click();
+      await refreshDevData();
+    } catch (err) {
+      toast(err.message || 'कार्रवाई नहीं हो सकी।', 'err');
+      setBusy(false);
+      disarm(btn);
+    }
+  };
+
+  const tempBtn = document.getElementById('devBanTempBtn');
+  if (tempBtn) tempBtn.addEventListener('click', () => run('ban-temporary', tempBtn));
+  const permBtn = document.getElementById('devBanPermBtn');
+  if (permBtn) permBtn.addEventListener('click', () => run('ban-permanent', permBtn));
+  const unbanBtn = document.getElementById('devUnbanBtn');
+  if (unbanBtn) unbanBtn.addEventListener('click', () => run('unban', unbanBtn));
+  const deleteBtn = document.getElementById('devDeleteUserBtn');
+  if (deleteBtn) deleteBtn.addEventListener('click', () => run('delete', deleteBtn));
 }
 
 function openDevModal(html) {
@@ -5508,7 +5664,7 @@ function renderTerms() {
           <li>अपमानजनक, सांप्रदायिक, धमकी भरा या अवैध नाम/सामग्री जोड़ना।</li>
           <li>किसी सरकारी चुनाव का प्रतिरूप बताकर भ्रम फैलाना।</li>
         </ul>
-        <p>ऐसा करने पर खाता/चुनाव बिना सूचना हटाया जा सकता है।</p>
+        <p>ऐसा करने पर खाता कुछ दिनों के लिए या स्थायी रूप से बंद किया जा सकता है, या खाता/चुनाव हटाया जा सकता है। रोक लगने पर लॉगिन संदेश में रोक की अवधि और दिया गया कारण दिखेगा; यदि आपको लगता है कि रोक गलत लगी है तो <a href="#/grievance">शिकायत पेज</a> से पुनर्विचार माँग सकते हैं।</p>
 
         <h3>6. सामग्री की ज़िम्मेदारी</h3>
         <p>उम्मीदवारों के नाम, पार्टी, चिन्ह और जानकारी आयोजक द्वारा भरी जाती है — उसकी सत्यता और अनुमति की ज़िम्मेदारी आयोजक की है। मंच केवल तकनीकी सुविधा देता है।</p>
@@ -5561,8 +5717,8 @@ function renderPrivacy() {
 
         <h3>2. डेटा किसको दिखता है</h3>
         <ul>
-          <li><b>सबको (सार्वजनिक):</b> मतदान के दौरान चुनाव का नाम, जगह, उम्मीदवार और कुल पड़े वोट। उम्मीदवारों के वोट व प्रतिशत चुनाव बंद होने के बाद दिखते हैं।</li>
-          <li><b>आयोजक को:</b> अपने चुनाव की कुल मतदान संख्या और तय नियमों के अनुसार “बंद करें” का अधिकार। चलती उम्मीदवार-गिनती उसे भी नहीं दिखती, और वह यह भी <b>नहीं</b> देख सकता कि किसने किसको वोट दिया।</li>
+          <li><b>सबको (सार्वजनिक):</b> मतदान के दौरान चुनाव का नाम, जगह और उम्मीदवार। कुल पड़े वोट, उम्मीदवारों के वोट व प्रतिशत चुनाव बंद होने के बाद दिखते हैं।</li>
+          <li><b>आयोजक को:</b> तय नियमों के अनुसार अपने चुनाव का प्रबंधन। मतदान चलने के दौरान कुल संख्या और उम्मीदवार-गिनती उसे भी नहीं दिखती, और वह यह भी <b>नहीं</b> देख सकता कि किसने किसको वोट दिया।</li>
           <li><b>डेवलपर को (पासवर्ड से):</b> पूरा विवरण — हर यूज़र का नाम, उसके चुनाव और किसने किसको वोट दिया। यह सिर्फ़ साइट के संचालक के पास है।</li>
           <li><b>किसी को नहीं बेचा जाता</b> और किसी विज्ञापन कंपनी से साझा नहीं किया जाता।</li>
         </ul>

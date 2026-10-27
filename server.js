@@ -189,6 +189,7 @@ const SYMBOL_IDS = [
 let db = null;
 let saveTimer = null;
 let pendingSave = null;
+let persistQueue = Promise.resolve();   /* Redis writes को क्रम में रखता है */
 let storageMode = USE_REDIS ? 'redis' : 'file';
 
 /* 📊 महीने की असली Redis command गिनती (डेव पैनल के usage meter के लिए)
@@ -297,15 +298,22 @@ function writeFileDb(data) {
 }
 
 async function persistNow(data) {
-  if (USE_REDIS && storageMode === 'redis') {
-    try {
-      await redisRequest('/set/' + encodeURIComponent(REDIS_KEY), JSON.stringify(data || db));
-      return;
-    } catch (err) {
-      console.error('Redis save failed:', err.message);
+  /* 🔒 एक-एक करके save करो। वरना समानांतर vote/signup के समय पुराना Redis
+     snapshot नए snapshot के बाद पहुँचकर ताज़ा डेटा पीछे धकेल सकता था।
+     Snapshot queue की बारी आने पर बनता है, इसलिए हमेशा ताज़ा स्थिति जाती है। */
+  const run = async () => {
+    if (USE_REDIS && storageMode === 'redis') {
+      try {
+        await redisRequest('/set/' + encodeURIComponent(REDIS_KEY), JSON.stringify(data || db));
+        return;
+      } catch (err) {
+        console.error('Redis save failed:', err.message);
+      }
     }
-  }
-  writeFileDb(data || db);
+    writeFileDb(data || db);
+  };
+  persistQueue = persistQueue.then(run, run);
+  return persistQueue;
 }
 
 /** debounced save (use for non-critical writes) */
@@ -581,7 +589,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.2-result-card';
+const APP_VERSION = '8.2.1-audit-fix';
 
 function publicElection(e, viewer) {
   const t = tally(e);
@@ -605,7 +613,12 @@ function publicElection(e, viewer) {
 
 function quotaFor(user) {
   const today = istDayKey();
-  const used = db.elections.filter((e) => e.creatorId === user.id && istDayKey(e.createdAt) === today).length;
+  const existing = db.elections.filter((e) => e.creatorId === user.id && istDayKey(e.createdAt) === today).length;
+  /* हटाए गए चुनावों की भी गिनती याद रखो — वरना चुनाव हटाकर उसी दिन
+     रोज़-वाली सीमा बार-बार नई की जा सकती थी। पुराने खातों के लिए मौजूद
+     चुनावों की संख्या को ही शुरुआती आधार मानते हैं। */
+  const recorded = user && user.electionDay === today ? (Number(user.electionDayCount) || 0) : 0;
+  const used = Math.max(existing, recorded);
   return {
     limit: DAILY_ELECTION_LIMIT,
     used,
@@ -912,22 +925,40 @@ function sendJson(res, status, obj) {
 function readBody(req, limit = 512 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let settled = false;
     const chunks = [];
+    const fail = (message, statusCode) => {
+      if (settled) return;
+      settled = true;
+      const err = new Error(message);
+      err.statusCode = statusCode;
+      reject(err);
+    };
     req.on('data', (c) => {
+      if (settled) return;
       size += c.length;
       if (size > limit) {
-        reject(new Error('Payload too large'));
-        req.destroy();
+        fail('Payload too large', 413);
+        /* 413 response को flush होने का एक क्षण देकर connection बंद करो */
+        const killer = setTimeout(() => { try { req.destroy(); } catch (_) {} }, 25);
+        if (killer.unref) killer.unref();
         return;
       }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (settled) return;
       const raw = Buffer.concat(chunks).toString('utf8');
-      if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch (_) { reject(new Error('Invalid JSON')); }
+      if (!raw) { settled = true; return resolve({}); }
+      try {
+        const parsed = JSON.parse(raw);
+        settled = true;
+        /* सभी API body object ही मानते हैं — null/array/string आने पर
+           handler में TypeError/500 की जगह सामान्य validation error मिले। */
+        resolve(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
+      } catch (_) { fail('Invalid JSON', 400); }
     });
-    req.on('error', reject);
+    req.on('error', (err) => { if (!settled) { settled = true; reject(err); } });
   });
 }
 
@@ -982,11 +1013,15 @@ function safeEqual(a, b) {
 }
 
 function devTokenValid(req) {
-  const token = clean(req.headers['x-dev-token'] || '', 80);
-  if (!token) return false;
+  const token = clean(req && req.headers ? (req.headers['x-dev-token'] || '') : '', 80);
+  /* 🔒 सिर्फ़ server का बनाया 56-hex token और devSessions की अपनी
+     (own-property) entry ही मान्य है। Object.prototype से inherited
+     key को कभी session न समझा जाए — यही इस audit की सबसे गंभीर fix है। */
+  if (!/^[a-f0-9]{56}$/.test(token) || !db || !db.devSessions || typeof db.devSessions !== 'object') return false;
+  if (!Object.prototype.hasOwnProperty.call(db.devSessions, token)) return false;
   const s = db.devSessions[token];
-  if (!s) return false;
-  if (s.expiresAt < Date.now()) {
+  const exp = Number(s && s.expiresAt);
+  if (!s || typeof s !== 'object' || !Number.isFinite(exp) || exp <= Date.now()) {
     delete db.devSessions[token];
     save();
     return false;
@@ -1530,6 +1565,20 @@ async function handleApi(req, res, pathname) {
     }
     if (!title) title = `${gram} — ${type} चुनाव`;
 
+    /* body पढ़ने के दौरान समानांतर अनुरोध आ सकते हैं — DB में जोड़ने से
+       ठीक पहले कोटा फिर जाँचो, वरना धीमी/आधी body वाले कई अनुरोध एक साथ
+       शुरुआती जाँच पार करके रोज़ की सीमा से ज़्यादा चुनाव बना सकते थे। */
+    const qNow = quotaFor(viewer);
+    if (qNow.remaining <= 0) {
+      return sendJson(res, 403, {
+        error: `आप आज की सीमा (${qNow.limit} चुनाव प्रतिदिन) पूरी कर चुके हैं। अगला चुनाव ${new Date(qNow.resetsAt).toLocaleString('hi-IN', { timeZone: 'Asia/Kolkata' })} के बाद बना सकते हैं।`,
+        code: 'DAILY_LIMIT',
+        quota: qNow,
+      });
+    }
+    viewer.electionDay = istDayKey();
+    viewer.electionDayCount = qNow.used + 1;
+
     const e = {
       code: newCode(),
       title,
@@ -1593,6 +1642,11 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा अनुरोध। थोड़ी देर बाद प्रयास करें।' });
     }
     const body = await readBody(req);
+    /* body आने में देर हुई हो और उसी बीच समय पूरा हो गया हो तो वोट न लो */
+    syncElection(election);
+    if (election.closed) {
+      return sendJson(res, 403, { error: 'यह चुनाव समाप्त हो चुका है, अब वोट नहीं डाला जा सकता।' });
+    }
     const candidateId = clean(body.candidateId, 40);
     const device = deviceKeyFrom(req, body.deviceId);
     /* लॉगिन है तो उसका खाता, वरना यह डिवाइस ही मतदाता है */
@@ -1844,7 +1898,7 @@ async function handleApi(req, res, pathname) {
 
   if (method === 'POST' && parts[1] === 'dev' && parts[2] === 'logout') {
     const token = clean(req.headers['x-dev-token'] || '', 80);
-    if (db.devSessions[token]) {
+    if (Object.prototype.hasOwnProperty.call(db.devSessions, token)) {
       delete db.devSessions[token];
       await saveNow();
     }
@@ -1882,8 +1936,7 @@ async function handleApi(req, res, pathname) {
   /* ---------- live stream: developer (needs dev token) ---------- */
   if (method === 'GET' && parts[1] === 'dev' && parts[2] === 'stream') {
     const t = clean(url.searchParams.get('token') || req.headers['x-dev-token'] || '', 80);
-    const sess = db.devSessions[t];
-    if (!sess || sess.expiresAt < Date.now()) {
+    if (!devTokenValid({ headers: { 'x-dev-token': t } })) {
       return sendJson(res, 401, { error: 'डेवलपर लॉगिन ज़रूरी है।', code: 'DEV_LOGIN_REQUIRED' });
     }
     const ip = clientIp(req);
@@ -2287,7 +2340,19 @@ const MIME = {
 };
 
 function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(pathname);
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname);
+  } catch (_) {
+    /* टूटा हुआ %-URL पूरे server को crash न करे */
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Bad request');
+  }
+  if (rel.includes('\0')) {
+    /* NUL byte वाला path fs.readFile को synchronous TypeError देता था */
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Bad request');
+  }
   if (rel === '/' || rel === '') rel = '/index.html';
   const filePath = path.join(PUBLIC_DIR, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -2347,8 +2412,29 @@ function applyCors(req, res) {
   if (!allowAll) res.setHeader('Vary', 'Origin');
 }
 
+/* Browser से आने वाले state-changing POST सिर्फ़ अपनी site/allowed
+   origin से स्वीकार करो। CORS response header अकेले किसी दूसरी website
+   के simple POST को server पर बदलाव करने से नहीं रोकता। बिना Origin
+   वाले server/CLI अनुरोध पहले जैसे चलते रहेंगे। */
+function apiOriginAllowed(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) return true;
+  try {
+    return new URL(origin).host.toLowerCase() === String(req.headers.host || '').toLowerCase();
+  } catch (_) {
+    return false;
+  }
+}
+
 const server = http.createServer((req, res) => {
-  const urlObj = new URL(req.url, 'http://localhost');
+  let urlObj;
+  try {
+    urlObj = new URL(req.url || '/', 'http://localhost');
+  } catch (_) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Bad request');
+  }
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -2364,10 +2450,20 @@ const server = http.createServer((req, res) => {
   }
 
   if (urlObj.pathname.startsWith('/api/')) {
+    if (req.method === 'POST' && !apiOriginAllowed(req)) {
+      return sendJson(res, 403, { error: 'यह अनुरोध इस website से स्वीकार नहीं किया जा सकता।' });
+    }
     handleApi(req, res, urlObj.pathname).catch((err) => {
-      console.error('API error:', err.message);
+      console.error('API error:', err && err.message);
       if (res.headersSent) return res.end();
-      sendJson(res, 500, { error: 'सर्वर में कुछ गड़बड़ हुई। फिर कोशिश करें।' });
+      const status = err && (err.statusCode === 400 || err.statusCode === 413) ? err.statusCode : 500;
+      sendJson(res, status, {
+        error: status === 413
+          ? 'भेजा गया डेटा बहुत बड़ा है।'
+          : status === 400
+            ? 'भेजा गया डेटा ठीक प्रारूप में नहीं है।'
+            : 'सर्वर में कुछ गड़बड़ हुई। फिर कोशिश करें।',
+      });
     });
     return;
   }

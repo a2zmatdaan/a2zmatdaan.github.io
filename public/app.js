@@ -3310,7 +3310,10 @@ function bindElectionPage(d) {
 function renderLogin() {
   setActiveNav('');
   clearPoll();
-  const next = new URLSearchParams(location.hash.split('?')[1] || '').get('next') || '';
+  const rawNext = new URLSearchParams(location.hash.split('?')[1] || '').get('next') || '';
+  /* सिर्फ़ site के अंदर के साफ़ route ही स्वीकार करो — crafted login link
+     से href तोड़कर DOM-XSS न बन सके। */
+  const next = /^[A-Za-z0-9][A-Za-z0-9/_-]*$/.test(rawNext) && !rawNext.includes('//') ? rawNext : '';
   if (state.user) {
     app.innerHTML = `
     <section class="section"><div class="wrap wrap-narrow">
@@ -3321,7 +3324,7 @@ function renderLogin() {
         ${state.user.username ? '' : '<p class="login-note" style="max-width:520px;margin:12px auto 0">⚠ अब लॉगिन username + PIN से होता है। कृपया अभी अपना स्थायी username चुन लें, वरना अगली बार लॉगिन में दिक्कत होगी।</p>'}
         <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px">
           ${state.user.username ? '' : '<button class="btn btn-primary" id="chooseUsernameBtnLogin" type="button">अपना Username चुनें</button>'}
-          <a class="btn ${state.user.username ? 'btn-primary' : 'btn-ghost'}" href="${next ? '#/' + next : '#/settings'}">आगे बढ़ें</a>
+          <a class="btn ${state.user.username ? 'btn-primary' : 'btn-ghost'}" href="${next ? '#/' + esc(next) : '#/settings'}">आगे बढ़ें</a>
           <button class="btn btn-ghost" id="switchUser">दूसरे खाते से लॉगिन</button>
         </div>
       </div>

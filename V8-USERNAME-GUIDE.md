@@ -202,7 +202,7 @@ Developer Panel खोलकर नया **“खाता आवेदन”**
   - लॉगिन
   - नया खाता
   - पुराना खाता
-- Server health में app version **`8.2-result-card`** दिखना चाहिए।
+- Server health में app version **`8.2.1-audit-fix`** दिखना चाहिए।
 - Developer Panel अपने पुराने password से खुलना चाहिए।
 - Panel में नया **“खाता आवेदन”** टैब दिखना चाहिए।
 - नया test खाता बनाकर logout/login, Guest वोट और एक test आवेदन ज़रूर जाँचें।
@@ -283,3 +283,21 @@ Developer Panel खोलकर नया **“खाता आवेदन”**
 - **पुराना सार्वजनिक हुआ default developer password-शब्द** code/docs से पूरी तरह हटा दिया गया है; server अब उसकी चेतावनी hash तुलना से देता है। अगर Render के `DEV_PASSWORD` में वही पुराना मान चल रहा हो, तो उसे **तुरंत बदलना सबसे ज़रूरी सुरक्षा कदम है** — क्योंकि Developer Panel ही पूरे डेटा की चाबी है।
 - GitHub, Render और Gmail खातों पर **2-Step Verification (2FA)** चालू रखना डेटा की असली तिजोरी है — खाता सुरक्षित, तो डेटा सुरक्षित।
 - **Idea बनाम code:** कानून code की नकल रोकता है, केवल "ऐसी ही voting site बनाने का विचार" नहीं रोक सकता। कोई अपनी मेहनत से मिलती-जुलती site बनाए तो वह कानूनी हो सकता है; लेकिन आपका code/लिखाई/चुनाव चिन्ह उठाना या "जनमत" नाम का भ्रमित करने वाला उपयोग रोका जा सकता है (GitHub पर DMCA शिकायत, और चाहें तो नाम का trademark व code का copyright registration)।
+
+---
+
+## 15. v8.2.1 — अंतिम गहन audit की ज़रूरी security fixes
+
+**v8.2 का पिछला ZIP deploy न करें; इसी v8.2.1 ZIP को deploy करें।** Deploy से पहले अलग local copies पर OWASP API/XSS/CSP जाँच-सूची, authorization, malformed input, समानांतर race, CORS और persistence की गहन जाँच की गई। Live site पर कोई वोट, खाता या Developer-login परीक्षण नहीं किया गया।
+
+इस patch में ठीक किया गया:
+
+- Developer session की जाँच में JavaScript की inherited object-key को असली session समझने की गंभीर भूल बंद की गई — अब सिर्फ़ server का बनाया 56-hex token और उसकी अपनी, समय-सीमा वाली DB entry चलेगी। Panel का password, UI, टैब और सामान्य काम वैसा ही रहेगा।
+- टूटा `%-URL` आने पर पूरा Node server crash होने की भूल ठीक की गई; अब साफ़ `400 Bad request` मिलेगा।
+- Login redirect (`next`) से crafted link द्वारा DOM-XSS बनने का रास्ता बंद किया गया।
+- धीमी/आधी body वाले समानांतर अनुरोधों से रोज़ के 2 चुनाव की सीमा पार होने की race ठीक की गई; हटाए गए चुनाव भी उस दिन की गिनती में रहेंगे।
+- Upstash में समानांतर saves अब क्रम से जाएँगे, ताकि पुराना snapshot नए vote/signup को पीछे न धकेले।
+- दूसरी website से browser द्वारा भेजे गए state-changing POST अब allowed origin/same-host जाँच से गुजरेंगे।
+- Invalid/`null` JSON पर अनावश्यक `500` की जगह सही `400/413` व्यवहार रखा गया और वोट की समय-सीमा body आने के बाद फिर जाँची जाती है।
+
+Deploy के बाद Render में `DEV_PASSWORD` अगर पुराना सार्वजनिक हुआ मान हो तो उसे नए मज़बूत password से बदलना और सभी खातों पर 2-Step Verification रखना फिर भी ज़रूरी है।

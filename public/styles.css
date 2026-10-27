@@ -313,7 +313,7 @@ img, svg { display: block; }
 .field label .req { color: var(--red); }
 .field .hint { font-size: 12.2px; color: var(--muted); font-weight: 500; }
 input[type="text"], input[type="search"], select, textarea {
-  width: 100%; font-family: inherit; font-size: 15px; color: var(--ink);
+  width: 100%; font-family: inherit; font-size: 16px; color: var(--ink);
   background: #fff; border: 1.5px solid #e2e1ee; border-radius: 12px;
   padding: 12px 14px; transition: border-color .16s, box-shadow .16s; appearance: none;
 }
@@ -321,6 +321,7 @@ input:focus, select:focus, textarea:focus {
   outline: none; border-color: #a89dff; box-shadow: 0 0 0 4px rgba(109, 91, 246, .13);
 }
 input::placeholder { color: #a9a8bd; }
+input[type="number"], input[type="password"], input[type="tel"], input[type="email"] { font-size: 16px; }
 select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7093' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 14px center; padding-right: 40px;
@@ -348,7 +349,7 @@ select {
   width: 34px; height: 34px; border-radius: 10px; background: #fff; border: 1px solid var(--line);
   display: grid; place-items: center; font-weight: 800; font-size: 13px; color: var(--muted);
 }
-.cand-edit input { padding: 10px 12px; font-size: 14.2px; border-radius: 10px; }
+.cand-edit input { padding: 10px 12px; font-size: 16px; border-radius: 10px; }
 .icon-btn {
   width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: #fff;
   display: grid; place-items: center; cursor: pointer; color: var(--muted); transition: .16s;

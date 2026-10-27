@@ -786,8 +786,13 @@
       if (!election.devices) election.devices = {};
       if (election.votes[voterId]) throw err('आप इस चुनाव में पहले ही वोट कर चुके हैं।', 409, 'ALREADY_VOTED', { election: full(election, voterObj) });
       var fpAlready = !!(fpKey && election.fpVotes && election.fpVotes[fpKey] && election.fpVotes[fpKey].length);
-      if (fpAlready && body.overrideSamePhone !== true) {
-        throw err('इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।', 409, 'SAME_PHONE_VOTED', { allowOverride: true, election: full(election, voterObj) });
+      /* override सिर्फ़ लॉगिन खाते को — Guest को कभी नहीं (इनकॉग्निटो दुरुपयोग रोक) */
+      var overrideOk = fpAlready && body.overrideSamePhone === true && !!viewer;
+      if (fpAlready && !overrideOk) {
+        throw err(viewer
+          ? 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।'
+          : 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। बिना खाते के (Guest) इस फ़ोन से दोबारा वोट नहीं हो सकता। अगर आप परिवार के दूसरे सदस्य हैं, तो पहले अपने खाते से लॉगिन करें (नया खाता Developer की मंज़ूरी से बनता है) — फिर वोट कर पाएँगे।',
+          409, 'SAME_PHONE_VOTED', { allowOverride: !!viewer, election: full(election, voterObj) });
       }
       if (election.devices[deviceKey]) {
         throw err('इस फ़ोन/डिवाइस से इस चुनाव में वोट दिया जा चुका है। एक डिवाइस से सिर्फ़ एक ही वोट मान्य है।', 409, 'DEVICE_VOTED', { election: full(election, voterObj) });

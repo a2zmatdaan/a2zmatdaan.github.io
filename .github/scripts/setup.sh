@@ -21,7 +21,7 @@ fi
 
 BOLD "2/3 · Smoke test (asli server chala kar)"
 if [ -f .github/scripts/smoke.sh ]; then
-  PORT=3000 DEV_PASSWORD="${DEV_PASSWORD:-KHOHDEEG}" bash .github/scripts/smoke.sh
+  PORT=3000 DEV_PASSWORD="${DEV_PASSWORD:-JanmatCiTestOnly!2026}" bash .github/scripts/smoke.sh
 else
   echo "❌ .github/scripts/smoke.sh nahi mila — ZIP adhoora lagta hai"
   exit 1
@@ -60,7 +60,7 @@ fi
   echo "| Blueprint | **Apply** दबाएँ — बाकी सब \`render.yaml\` से अपने आप |"
   echo "| लाइव URL | 2–3 मिनट में \`https://<service-name>.onrender.com\` |"
   echo ""
-  echo "डेवलपर पैनल: \`/#/developer\` · पासवर्ड: \`KHOHDEEG\`"
+  echo "डेवलपर पैनल: \`/#/developer\` · पासवर्ड: Render Environment में सेट किया गया मान (सुरक्षा के लिए यहाँ नहीं छापा जाता)"
   echo ""
   echo "> पहली बार खुलने में ~50 सेकंड लग सकते हैं (Render free plan सोता है)।"
 } >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"

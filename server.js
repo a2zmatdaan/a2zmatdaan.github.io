@@ -581,7 +581,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.0-username';
+const APP_VERSION = '8.2-result-card';
 
 function publicElection(e, viewer) {
   const t = tally(e);
@@ -1610,16 +1610,21 @@ async function handleApi(req, res, pathname) {
       });
     }
     /* 🧬 इस फ़ोन से इस चुनाव में पहले ही वोट हो चुका है? (इनकॉग्निटो/दूसरा ब्राउज़र)
-       — पहले रोकते हैं और साफ़ संदेश देते हैं। अगर सच में दूसरा व्यक्ति है
-       (एक ही मॉडल का दूसरा फ़ोन), तो वह "मैं दूसरा व्यक्ति हूँ" दबाकर वोट कर सकता है
-       — और वह वोट डेवलपर को अलग से दिख जाता है। */
+       — पहले रोकते हैं और साफ़ संदेश देते हैं। "मैं दूसरा व्यक्ति हूँ" वाला override
+       सिर्फ़ लॉगिन किए हुए खाते को मिलता है (साझा फ़ोन का स्वीकृत दूसरा सदस्य /
+       एक ही मॉडल के दूसरे फ़ोन वाला असली व्यक्ति) — Guest को कभी नहीं, वरना हर
+       नए इनकॉग्निटो tab से वही बटन दबाकर असीमित फ़र्जी़ वोट डाले जा सकते थे।
+       खाते वाला override वोट भी डेवलपर को अलग से (flag के साथ) दिखता है। */
     const fpNow = fpKeyFrom(req);
     const fpAlready = !!(fpNow && election.fpVotes && election.fpVotes[fpNow] && election.fpVotes[fpNow].length);
-    if (fpAlready && body.overrideSamePhone !== true) {
+    const overrideOk = fpAlready && body.overrideSamePhone === true && !!viewer;
+    if (fpAlready && !overrideOk) {
       return sendJson(res, 409, {
-        error: 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।',
+        error: viewer
+          ? 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। एक फ़ोन से एक ही वोट मान्य है।'
+          : 'इस फ़ोन से इस चुनाव में पहले ही वोट दिया जा चुका है। बिना खाते के (Guest) इस फ़ोन से दोबारा वोट नहीं हो सकता। अगर आप परिवार के दूसरे सदस्य हैं, तो पहले अपने खाते से लॉगिन करें (नया खाता Developer की मंज़ूरी से बनता है) — फिर वोट कर पाएँगे।',
         code: 'SAME_PHONE_VOTED',
-        allowOverride: true,
+        allowOverride: !!viewer,
         election: publicElection(election, { id: voterId, name: voterName }),
       });
     }
@@ -2429,7 +2434,7 @@ const server = http.createServer((req, res) => {
     console.log('🗳️  जनमत (Janmat) server v2');
     if (!DEV_PASSWORD) {
       console.log('🔒 DEV_PASSWORD सेट नहीं है — डेवलपर पैनल बंद रहेगा (Render → Environment में डालें)');
-    } else if (DEV_PASSWORD === 'KHOHDEEG') {
+    } else if (sha256(DEV_PASSWORD) === '7da883f52d3db15e3147d771a60b9d50b59bad0d811cebb31334484153ddfb9c' /* पुराने सार्वजनिक हुए default का hash (अक्षरशः शब्द code में नहीं) */) {
       console.log('⚠️  DEV_PASSWORD पुराना/default है — बदल दें (यह repo/डॉक्स में सार्वजनिक था)');
     }
     console.log(`   URL      : http://0.0.0.0:${PORT}`);

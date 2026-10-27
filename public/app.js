@@ -1966,6 +1966,103 @@ function quotaBannerHTML(q) {
   </div>`;
 }
 
+/* =====================================================================
+   📱 कीबोर्ड-रक्षक (मोबाइल भाषा-स्विच bug का इलाज)
+   ---------------------------------------------------------------------
+   कुछ Android फ़ोनों पर कीबोर्ड की भाषा बदलते समय (English ↔ हिन्दी,
+   spacebar दबाकर रखने/🌐 से) कीबोर्ड की ऊँचाई बदलती है और उसी क्षण
+   browser लिखने वाले खाने से focus छीन लेता है — कीबोर्ड नीचे चला जाता है
+   और भाषा बदल ही नहीं पाती। यह रक्षक उसी खाने को तुरंत वापस focus करता है।
+   सुरक्षा-वाल्व: सिर्फ़ तब जब focus कीबोर्ड-resize के आसपास ही गुम हुआ हो,
+   उपयोगकर्ता ने खुद बाहर tap न किया हो, और बार-बार न हो रहा हो।
+   ===================================================================== */
+function keepFormFocus(form) {
+  if (!form || form.__focusKeeper) return;
+  form.__focusKeeper = true;
+  const vv = window.visualViewport;
+  let lastField = null;
+  let lostAt = 0;
+  let resizeAt = 0;
+  let outsideTapAt = 0;
+  let restores = [];
+
+  const isEditable = (el) => !!el && form.contains(el) &&
+    (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
+      (el.tagName === 'INPUT' && !/^(hidden|checkbox|radio|button|submit|file|image|reset)$/i.test(el.type || 'text')));
+
+  const refind = (el) => {
+    if (!el) return null;
+    if (el.isConnected && form.contains(el)) return el;
+    if (el.id) { const n = document.getElementById(el.id); if (n && form.contains(n)) return n; }
+    if (el.classList && (el.classList.contains('c-name') || el.classList.contains('c-party'))) {
+      const cls = el.classList.contains('c-name') ? 'c-name' : 'c-party';
+      const all = form.querySelectorAll('.' + cls);
+      return all[Number(el.__candIdx || 0)] || all[0] || null;
+    }
+    return null;
+  };
+
+  const tryRestore = (source) => {
+    if (!lastField || !lostAt) return;
+    const now = Date.now();
+    const act = document.activeElement;
+    /* focus किसी और बटन/खाने पर सही सलामत हो — बिल्कुल न टोको */
+    if (act && act !== document.body && act !== document.documentElement) return;
+    /* उपयोगकर्ता ने खुद बाहर tap करके हटाया हो — सम्मान करो */
+    if (outsideTapAt && Math.abs(lostAt - outsideTapAt) < 1200) return;
+    const recentLoss = (now - lostAt) < 1000;
+    const recentResize = resizeAt && (now - resizeAt) < 1000;
+    if (source === 'focusout' && !recentResize) return;
+    if (source === 'resize' && !recentLoss) return;
+    if (!recentLoss) return;
+    /* 6 सेकंड में 4 से ज़्यादा वापसी हो चुकी हो — छोड़ दो, उपयोगकर्ता फँसे नहीं */
+    restores = restores.filter((x) => now - x < 6000);
+    if (restores.length >= 4) return;
+    const el = refind(lastField);
+    if (!el || el.disabled || el.readOnly) return;
+    restores.push(now);
+    lostAt = 0;
+    lastField = el;
+    const val = typeof el.value === 'string' ? el.value : '';
+    try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_2) {} }
+    try {
+      if (el.setSelectionRange && /^(text|search|tel|url|password|)$/i.test(el.type || 'text') && el.tagName !== 'SELECT') {
+        el.setSelectionRange(val.length, val.length);
+      }
+    } catch (_) {}
+  };
+
+  form.addEventListener('focusin', (ev) => {
+    if (!isEditable(ev.target)) return;
+    lastField = ev.target;
+    lostAt = 0;
+    if (lastField.classList && (lastField.classList.contains('c-name') || lastField.classList.contains('c-party'))) {
+      const cls = lastField.classList.contains('c-name') ? 'c-name' : 'c-party';
+      lastField.__candIdx = Array.prototype.indexOf.call(form.querySelectorAll('.' + cls), lastField);
+    }
+  });
+  form.addEventListener('focusout', (ev) => {
+    if (!isEditable(ev.target)) return;
+    /* उसी फ़ॉर्म के अगले खाने पर जाना बिल्कुल ठीक है */
+    if (ev.relatedTarget && form.contains(ev.relatedTarget)) return;
+    lostAt = Date.now();
+    setTimeout(() => tryRestore('focusout'), 70);
+    setTimeout(() => tryRestore('focusout'), 400);
+  });
+  /* बाहर tap = उपयोगकर्ता की अपनी इच्छा (capture से सबसे पहले पता चलता है) */
+  document.addEventListener('pointerdown', (ev) => {
+    const tg = ev.target;
+    if (!tg || tg === lastField) return;
+    if (!isEditable(tg)) outsideTapAt = Date.now();
+  }, true);
+  if (vv && vv.addEventListener) {
+    vv.addEventListener('resize', () => {
+      resizeAt = Date.now();
+      setTimeout(() => tryRestore('resize'), 70);
+    });
+  }
+}
+
 async function renderCreate() {
   setActiveNav('');
   clearPoll();
@@ -2102,6 +2199,7 @@ async function renderCreate() {
     </div>
   </section>`;
 
+  keepFormFocus(document.getElementById('createForm'));
   const list = document.getElementById('candList');
   document.getElementById('addCand').addEventListener('click', () => {
     if ($$('#candList [data-row]').length >= 40) return toast('ज़्यादा से ज़्यादा 40 उम्मीदवार जोड़ सकते हैं।', 'err');
@@ -2401,6 +2499,408 @@ function resultsHTML(d) {
     <div class="results">${rows}</div>`;
 }
 
+/* ===== RESULT-CARD-START ===== */
+/* =====================================================================
+   🏆 परिणाम कार्ड — HD तस्वीर (PNG) डाउनलोड/शेयर के लिए
+   ---------------------------------------------------------------------
+   उपयोगकर्ता चुनाव का परिणाम सुंदर फ़्रेम में सेव कर सकता है।
+   कार्ड के बिल्कुल नीचे साफ़ डिस्क्लेमर पट्टी हमेशा छपती है:
+   यह जीत/परिणाम निर्वाचन आयोग के लिए मान्य नहीं है — यह सिर्फ़
+   सामुदायिक समर्थन का अंदाज़ा है।
+   ===================================================================== */
+
+function _symbolImageForCard(id) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    setTimeout(() => finish(null), 1800);   // किसी कारण अटके तो कार्ड रुके नहीं
+    try {
+      const svg = symbolSVG(id, 160).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+      const img = new Image();
+      img.onload = () => finish(img);
+      img.onerror = () => finish(null);
+      /* base64 data-URI हर browser/WebView में सबसे भरोसेमंद चलता है */
+      if (window.TextEncoder) {
+        const bytes = new TextEncoder().encode(svg);
+        let bin = '';
+        bytes.forEach((b) => { bin += String.fromCharCode(b); });
+        img.src = 'data:image/svg+xml;base64,' + btoa(bin);
+      } else {
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      }
+    } catch (_) { finish(null); }
+  });
+}
+
+function _wrapCardText(x, text, maxW, maxLines) {
+  const words = String(text == null ? '' : text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let i = 0;
+  let line = '';
+  while (i < words.length) {
+    const test = line ? line + ' ' + words[i] : words[i];
+    if (x.measureText(test).width <= maxW || !line) { line = test; i++; } else {
+      lines.push(line);
+      line = '';
+      if (lines.length === maxLines) break;
+    }
+  }
+  if (line && lines.length < maxLines) { lines.push(line); line = ''; }
+  const more = i < words.length || !!line;
+  if (more && lines.length) {
+    let last = lines[lines.length - 1];
+    while (last.length > 1 && x.measureText(last + '…').width > maxW) last = last.slice(0, -1);
+    lines[lines.length - 1] = last.replace(/\s+$/, '') + '…';
+  }
+  return lines.length ? lines : [''];
+}
+
+function _fitOneLine(x, text, maxW) {
+  const s = String(text == null ? '' : text);
+  if (x.measureText(s).width <= maxW) return s;
+  let out = s;
+  while (out.length > 1 && x.measureText(out + '…').width > maxW) out = out.slice(0, -1);
+  return out.replace(/\s+$/, '') + '…';
+}
+
+async function resultCardCanvas(d) {
+  const F = '"Noto Sans Devanagari", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const res = (d && d.results) || {};
+  const all = (Array.isArray(res.candidates) ? res.candidates.slice() : [])
+    .sort((a, b) => (Number(b.votes) || 0) - (Number(a.votes) || 0));
+  const total = Number(res.totalVotes != null ? res.totalVotes
+    : (d.totalVotes != null ? d.totalVotes : all.reduce((s, c) => s + (Number(c.votes) || 0), 0))) || 0;
+  const maxV = all.reduce((m, c) => Math.max(m, Number(c.votes) || 0), 0);
+  const leaders = (total > 0 && maxV > 0) ? all.filter((c) => (Number(c.votes) || 0) === maxV) : [];
+  const tie = leaders.length > 1;
+  const MAXR = 10;
+  const shown = all.length > MAXR ? all.slice(0, MAXR - 1) : all;
+  const extra = all.length - shown.length;
+  const pctOf = (c) => {
+    const p = Number(c.percent);
+    if (isFinite(p)) return p;
+    return total ? Math.round(((Number(c.votes) || 0) / total) * 1000) / 10 : 0;
+  };
+
+  /* चुनाव चिन्हों की तस्वीरें पहले से तैयार */
+  const symImgs = {};
+  await Promise.all([...new Set(shown.map((c) => c.symbol))].map(async (id) => {
+    symImgs[id] = await _symbolImageForCard(id);
+  }));
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (_) {}
+
+  /* -------- नाप (पहले ऊँचाई निकालो, फिर बनाओ) -------- */
+  const W = 1080;
+  const M = 36;                 // बाहर की किनारी
+  const cardX = M, cardW = W - M * 2;
+  const inX = cardX + 46, inW = cardW - 92;
+  const rowH = shown.length <= 5 ? 134 : shown.length <= 8 ? 118 : 106;
+  const rowGap = 14;
+
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = '800 47px ' + F;
+  const titleLines = _wrapCardText(meas, d.title || 'चुनाव परिणाम', inW, 2);
+  meas.font = '600 25px ' + F;
+  const disclaimer = 'ज़रूरी सूचना: यह जनमत का अनौपचारिक सामुदायिक राय-सर्वे मात्र है। यह जीत/परिणाम निर्वाचन आयोग या किसी सरकारी चुनाव के लिए मान्य नहीं है। यह केवल यह अंदाज़ा देता है कि उम्मीदवार को लोगों का कितना समर्थन मिल सकता है — वास्तविक परिणाम आधिकारिक मतगणना से ही तय होगा।';
+  const discLines = _wrapCardText(meas, disclaimer, inW - 120, 6);
+  const discH = discLines.length * 36 + 42;
+
+  let est = 40;                                   // कार्ड ऊपर की जगह
+  est += 76;                                      // ब्रांड पंक्ति
+  est += 30;                                      // लकीर + दूरी
+  est += 36;                                      // प्रकार (किकर)
+  est += titleLines.length * 58 + 6;              // शीर्षक
+  est += 40 + 38;                                 // स्थान + गिनती पंक्तियाँ
+  est += 24 + 120;                                // आगे/विजेता पट्टी
+  est += 26 + shown.length * rowH + Math.max(0, shown.length - 1) * rowGap;
+  if (extra > 0) est += 46;
+  if (!shown.length) est += 60;
+  est += 30 + 44;                                 // नीचे ब्रांड पंक्ति
+  est += 20 + discH;                              // डिस्क्लेमर पट्टी
+  est += 38;                                      // कार्ड नीचे की जगह
+  const H = Math.max(1180, est + M * 2);
+
+  /* -------- बनाना शुरू -------- */
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const x = cv.getContext('2d');
+  x.textBaseline = 'middle';
+
+  // पृष्ठभूमि: गहरा नीला ग्रेडिएंट + हल्की चमक
+  const bg = x.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#232a63'); bg.addColorStop(0.55, '#141a45'); bg.addColorStop(1, '#0c1030');
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  [[120, 150, 280, 'rgba(255,176,32,.20)'], [990, 260, 230, 'rgba(109,91,246,.28)'],
+   [920, H - 180, 320, 'rgba(255,255,255,.08)'], [90, H - 320, 200, 'rgba(255,157,10,.12)']]
+    .forEach(([cx, cy, r, col]) => {
+      const rg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+      rg.addColorStop(0, col); rg.addColorStop(1, 'rgba(255,255,255,0)');
+      x.fillStyle = rg; x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+    });
+
+  // सफ़ेद कार्ड + सुनहरी अंदरूनी किनारी
+  const cardY = M, cardH = H - M * 2;
+  x.save();
+  x.shadowColor = 'rgba(0,0,0,.38)'; x.shadowBlur = 44; x.shadowOffsetY = 20;
+  roundRect(x, cardX, cardY, cardW, cardH, 42);
+  x.fillStyle = '#ffffff'; x.fill();
+  x.restore();
+  roundRect(x, cardX + 11, cardY + 11, cardW - 22, cardH - 22, 33);
+  x.strokeStyle = 'rgba(255,157,10,.55)'; x.lineWidth = 3; x.stroke();
+
+  let y = cardY + 40;
+
+  /* ब्रांड पंक्ति */
+  const markG = x.createLinearGradient(inX, y, inX + 66, y + 66);
+  markG.addColorStop(0, '#ffb020'); markG.addColorStop(1, '#f97316');
+  roundRect(x, inX, y + 4, 66, 66, 18);
+  x.fillStyle = markG; x.fill();
+  x.strokeStyle = '#ffffff'; x.lineWidth = 7; x.lineCap = 'round'; x.lineJoin = 'round';
+  x.beginPath(); x.moveTo(inX + 19, y + 38); x.lineTo(inX + 30, y + 49); x.lineTo(inX + 49, y + 26); x.stroke();
+  x.fillStyle = '#131735';
+  x.font = '800 45px ' + F;
+  x.fillText('जनमत', inX + 84, y + 30);
+  x.fillStyle = '#6b7093';
+  x.font = '600 21px ' + F;
+  x.fillText('JANMAT · सामुदायिक राय-सर्वे', inX + 86, y + 62);
+  // स्थिति बैज (दाएँ)
+  const badge = d.closed ? 'अंतिम परिणाम' : 'लाइव स्थिति';
+  x.font = '800 24px ' + F;
+  const bw = x.measureText(badge).width + 44;
+  roundRect(x, cardX + cardW - 46 - bw, y + 12, bw, 48, 24);
+  x.fillStyle = d.closed ? '#e6f8f0' : '#fff4e0'; x.fill();
+  x.fillStyle = d.closed ? '#0a7d4e' : '#b26a00';
+  x.textAlign = 'center';
+  x.fillText(badge, cardX + cardW - 46 - bw / 2, y + 37);
+  x.textAlign = 'left';
+  y += 76;
+
+  // लकीर
+  y += 18;
+  x.strokeStyle = '#eceaf6'; x.lineWidth = 2;
+  x.beginPath(); x.moveTo(inX, y); x.lineTo(inX + inW, y); x.stroke();
+  y += 12;
+
+  /* प्रकार + शीर्षक + स्थान */
+  x.fillStyle = '#e28300';
+  x.font = '800 25px ' + F;
+  x.fillText(_fitOneLine(x, (d.type || 'चुनाव') + ' चुनाव · परिणाम कार्ड', inW), inX, y + 17);
+  y += 36;
+  x.fillStyle = '#131735';
+  x.font = '800 47px ' + F;
+  titleLines.forEach((ln) => { x.fillText(ln, inX, y + 29); y += 58; });
+  y += 6;
+  x.fillStyle = '#3b4066';
+  x.font = '600 27px ' + F;
+  const place = [d.gram, d.district, d.state].filter(Boolean).join(' · ');
+  x.fillText(_fitOneLine(x, 'स्थान: ' + place, inW), inX, y + 20);
+  y += 40;
+  x.fillStyle = '#6b7093';
+  x.font = '600 25px ' + F;
+  x.fillText(_fitOneLine(x, `कुल वोट: ${fmt(total)}  ·  उम्मीदवार: ${fmt(all.length)}  ·  चुनाव कोड: ${d.code || ''}`, inW), inX, y + 19);
+  y += 38;
+
+  /* विजेता / सबसे आगे पट्टी */
+  y += 24;
+  const bandH = 120;
+  const bandG = x.createLinearGradient(inX, y, inX + inW, y);
+  if (total > 0) { bandG.addColorStop(0, '#ffb020'); bandG.addColorStop(1, '#ff8a3d'); }
+  else { bandG.addColorStop(0, '#e9e9f2'); bandG.addColorStop(1, '#dcdce9'); }
+  roundRect(x, inX, y, inW, bandH, 26);
+  x.fillStyle = bandG; x.fill();
+  if (total > 0 && leaders.length) {
+    x.beginPath(); x.arc(inX + 58, y + bandH / 2, 34, 0, Math.PI * 2);
+    x.fillStyle = 'rgba(255,255,255,.28)'; x.fill();
+    x.fillStyle = '#ffffff';
+    x.font = '800 40px ' + F;
+    x.textAlign = 'center';
+    x.fillText('★', inX + 58, y + bandH / 2 + 2);
+    x.textAlign = 'left';
+    const leadLabel = tie ? 'बराबरी — सर्वाधिक मत पाने वाले'
+      : d.closed ? 'विजेता (इस सर्वे के अनुसार)' : 'अभी सबसे आगे';
+    x.fillStyle = 'rgba(36,20,0,.72)';
+    x.font = '700 23px ' + F;
+    x.fillText(leadLabel, inX + 112, y + 34);
+    const leadName = leaders.map((c) => c.name).join(' व ');
+    x.fillStyle = '#241400';
+    x.font = '800 38px ' + F;
+    x.fillText(_fitOneLine(x, leadName, inW - 330), inX + 112, y + 76);
+    const lpct = total ? Math.round((maxV / total) * 1000) / 10 : 0;
+    x.textAlign = 'right';
+    x.fillStyle = '#241400';
+    x.font = '800 44px ' + F;
+    x.fillText(fmt(maxV) + ' वोट', inX + inW - 30, y + 44);
+    x.font = '700 26px ' + F;
+    x.fillStyle = 'rgba(36,20,0,.72)';
+    x.fillText(lpct + '% हिस्सा', inX + inW - 30, y + 84);
+    x.textAlign = 'left';
+  } else {
+    x.fillStyle = '#3b4066';
+    x.font = '800 32px ' + F;
+    x.textAlign = 'center';
+    x.fillText('अभी तक कोई वोट नहीं पड़ा', inX + inW / 2, y + bandH / 2);
+    x.textAlign = 'left';
+  }
+  y += bandH;
+
+  /* उम्मीदवार पंक्तियाँ */
+  y += 26;
+  const medal = ['#f5b301', '#9aa3b2', '#c47b42'];
+  shown.forEach((c, i) => {
+    const votes = Number(c.votes) || 0;
+    const isLead = total > 0 && votes === maxV && maxV > 0;
+    roundRect(x, inX, y, inW, rowH, 22);
+    x.fillStyle = isLead ? '#fff6df' : '#f7f7fd';
+    x.fill();
+    if (isLead) {
+      x.strokeStyle = 'rgba(255,157,10,.65)'; x.lineWidth = 2.5; x.stroke();
+    }
+    // क्रम गोला
+    x.beginPath(); x.arc(inX + 42, y + 46, 21, 0, Math.PI * 2);
+    x.fillStyle = medal[i] || '#d9d9e8'; x.fill();
+    x.fillStyle = i < 3 ? '#ffffff' : '#565d80';
+    x.font = '800 24px ' + F;
+    x.textAlign = 'center';
+    x.fillText(String(i + 1), inX + 42, y + 47);
+    x.textAlign = 'left';
+    // चिन्ह टाइल
+    const tileX = inX + 78, tileY = y + 16, tileS = 64;
+    roundRect(x, tileX, tileY, tileS, tileS, 16);
+    x.fillStyle = '#ffffff'; x.fill();
+    x.strokeStyle = '#e4e2f0'; x.lineWidth = 2; x.stroke();
+    const img = symImgs[c.symbol];
+    if (img) {
+      try { x.drawImage(img, tileX + 9, tileY + 9, tileS - 18, tileS - 18); } catch (_) {}
+    } else {
+      x.fillStyle = '#4b3fd4';
+      x.font = '800 30px ' + F;
+      x.textAlign = 'center';
+      x.fillText(String(c.name || '?').trim().charAt(0) || '?', tileX + tileS / 2, tileY + tileS / 2 + 1);
+      x.textAlign = 'left';
+    }
+    // नाम + पार्टी
+    const nameX = tileX + tileS + 20;
+    const numW = 190;
+    x.fillStyle = '#131735';
+    x.font = '800 32px ' + F;
+    x.fillText(_fitOneLine(x, c.name || '', inW - (nameX - inX) - numW), nameX, y + 38);
+    x.fillStyle = '#6b7093';
+    x.font = '600 23px ' + F;
+    x.fillText(_fitOneLine(x, c.party ? c.party : 'निर्दलीय', inW - (nameX - inX) - numW), nameX, y + 72);
+    // वोट संख्या + %
+    x.textAlign = 'right';
+    x.fillStyle = '#131735';
+    x.font = '800 38px ' + F;
+    x.fillText(fmt(votes), inX + inW - 28, y + 40);
+    x.fillStyle = '#6b7093';
+    x.font = '700 24px ' + F;
+    x.fillText(pctOf(c) + '%', inX + inW - 28, y + 74);
+    x.textAlign = 'left';
+    // प्रगति पट्टी
+    const barX = nameX, barW = inW - (nameX - inX) - 28, barY = y + rowH - 30;
+    roundRect(x, barX, barY, barW, 13, 7);
+    x.fillStyle = '#e8e8f3'; x.fill();
+    const fw = maxV > 0 ? Math.max(0, Math.min(barW, (votes / maxV) * barW)) : 0;
+    if (fw > 4) {
+      const fg = x.createLinearGradient(barX, 0, barX + barW, 0);
+      if (isLead) { fg.addColorStop(0, '#ffb020'); fg.addColorStop(1, '#f97316'); }
+      else { fg.addColorStop(0, '#6d5bf6'); fg.addColorStop(1, '#4b3fd4'); }
+      roundRect(x, barX, barY, fw, 13, 7);
+      x.fillStyle = fg; x.fill();
+    }
+    y += rowH + rowGap;
+  });
+  if (shown.length) y -= rowGap;
+  if (extra > 0) {
+    x.fillStyle = '#6b7093';
+    x.font = '600 24px ' + F;
+    x.textAlign = 'center';
+    x.fillText(`+ ${fmt(extra)} और उम्मीदवार — पूरी सूची साइट पर देखें`, inX + inW / 2, y + 26);
+    x.textAlign = 'left';
+    y += 46;
+  }
+  if (!shown.length) y += 60;
+
+  /* नीचे ब्रांड पंक्ति */
+  y += 30;
+  x.fillStyle = '#131735';
+  x.font = '800 27px ' + F;
+  x.fillText('जनमत', inX, y + 20);
+  const brandW = x.measureText('जनमत').width;
+  x.fillStyle = '#6b7093';
+  x.font = '600 24px ' + F;
+  x.fillText('· a2zmatdaan.github.io', inX + brandW + 12, y + 20);
+  let dateStr = '';
+  try {
+    dateStr = new Date(d.closedAt || Date.now()).toLocaleString('hi-IN', {
+      timeZone: 'Asia/Kolkata', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  } catch (_) {}
+  x.textAlign = 'right';
+  x.fillText(dateStr, inX + inW, y + 20);
+  x.textAlign = 'left';
+  y += 44;
+
+  /* डिस्क्लेमर पट्टी — बिल्कुल नीचे, साफ़-साफ़ */
+  y += 20;
+  roundRect(x, inX, y, inW, discH, 20);
+  x.fillStyle = '#fff4e5'; x.fill();
+  x.strokeStyle = '#ffd9a0'; x.lineWidth = 2; x.stroke();
+  x.beginPath(); x.arc(inX + 44, y + 48, 20, 0, Math.PI * 2);
+  x.fillStyle = '#e5484d'; x.fill();
+  x.fillStyle = '#ffffff';
+  x.font = '800 28px ' + F;
+  x.textAlign = 'center';
+  x.fillText('!', inX + 44, y + 49);
+  x.textAlign = 'left';
+  x.fillStyle = '#5c3800';
+  x.font = '600 25px ' + F;
+  let dy = y + 21 + 18;
+  discLines.forEach((ln) => { x.fillText(ln, inX + 84, dy); dy += 36; });
+
+  return cv;
+}
+
+async function downloadResultCard(code, btn) {
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'कार्ड बन रहा है…'; }
+  try {
+    const fresh = await api('/api/elections/' + encodeURIComponent(code));
+    const cv = await resultCardCanvas(fresh);
+    const name = 'janmat-parinaam-' + String(fresh.code || code || 'card') + '.png';
+    const save = (href) => {
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    };
+    if (cv.toBlob) {
+      await new Promise((res) => {
+        cv.toBlob((b) => {
+          if (b) {
+            const u = URL.createObjectURL(b);
+            save(u);
+            setTimeout(() => { try { URL.revokeObjectURL(u); } catch (_) {} }, 4000);
+          } else {
+            save(cv.toDataURL('image/png'));
+          }
+          res();
+        }, 'image/png');
+      });
+    } else {
+      save(cv.toDataURL('image/png'));
+    }
+    toast('परिणाम कार्ड डाउनलोड हो गया', 'ok');
+  } catch (e) {
+    toast('कार्ड नहीं बन पाया — ' + (e && e.message ? e.message : 'कुछ देर बाद प्रयास करें'), 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+/* ===== RESULT-CARD-END ===== */
+
 function voteAreaHTML(d) {
   if (d.closed) {
     return `<div class="status-banner warn"><div class="sb-ico">${ICON.lock}</div>
@@ -2498,6 +2998,7 @@ function electionHTML(d) {
       <div class="ehead-actions">
         <button class="btn btn-saffron btn-sm" data-copy="${esc(link)}">${ICON.link} लिंक कॉपी करें</button>
         <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="https://wa.me/?text=${waText}">WhatsApp पर शेयर</a>
+        <button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड</button>
         <a class="btn btn-ghost btn-sm" href="#/explore">सारे चुनाव</a>
       </div>
     </div>
@@ -2514,7 +3015,10 @@ function electionHTML(d) {
       <div style="margin-top:34px">
         <div class="section-title">
           <h2>परिणाम</h2>
-          <span class="badge live"><i id="liveDot"></i> <span id="liveLabel">लाइव</span></span>
+          <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm js-result-card" type="button">📥 परिणाम कार्ड डाउनलोड</button>
+            <span class="badge live"><i id="liveDot"></i> <span id="liveLabel">लाइव</span></span>
+          </span>
         </div>
         <div id="resultsBox">${resultsHTML(d)}</div>
       </div>
@@ -2630,6 +3134,7 @@ async function renderElection(code, opts = {}) {
 
 function bindElectionPage(d) {
   bindLoginCard(() => renderElection(d.code, { refresh: true }));
+  $$('.js-result-card').forEach((b) => b.addEventListener('click', () => { downloadResultCard(d.code, b); }));
 
   const grid = document.getElementById('voteGrid');
   const voteBtn = document.getElementById('voteBtn');

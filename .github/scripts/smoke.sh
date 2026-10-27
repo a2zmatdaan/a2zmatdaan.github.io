@@ -7,7 +7,7 @@ set -euo pipefail
 
 PORT="${PORT:-3000}"
 BASE="http://127.0.0.1:${PORT}"
-PASS="${DEV_PASSWORD:-KHOHDEEG}"
+PASS="${DEV_PASSWORD:-JanmatCiTestOnly!2026}"
 DEVICE="ci-device-$(date +%s)"
 FAILED=0
 

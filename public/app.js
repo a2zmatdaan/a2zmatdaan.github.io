@@ -752,7 +752,7 @@ function showLoginCardModal(dataUrl, fileName, name, first, recoveryCode, userna
       <p class="lc-sub">${first ? 'इमेज डाउनलोड हो रही है — गैलरी/डाउनलोड्स में देखें।' : 'नीचे से इमेज डाउनलोड करें।'}</p>
       <img src="${dataUrl}" alt="लॉगिन कार्ड — ${esc(name)}" />
       <div class="lc-note">🔒 <b>इसे अच्छे से सँभाल कर रखें</b> — लॉगिन के लिए आपका username${username ? ' <b>@' + esc(username) + '</b>' : ''} और गुप्त PIN ही आपकी चाबी है।</div>
-      ${recoveryCode ? `<div class="recovery-show"><b>🔑 आपका गुप्त रिकवरी कोड</b><code>${esc(recoveryCode)}</code><span>PIN भूल जाएँ तो सिर्फ़ इसी कोड से खाता वापस मिलेगा। यह कोड यही कार्ड पर भी लिखा है — कार्ड किसी को न दें।</span><button type="button" class="btn btn-ghost btn-sm" id="lcCopyRecovery">कोड कॉपी करें</button></div>` : ''}
+      ${recoveryCode ? `<div class="recovery-show"><b>🔑 आपका गुप्त रिकवरी कोड</b><code>${esc(recoveryCode)}</code><span>PIN भूल जाएँ तो खाता इसी कोड से वापस मिलेगा। यह कोड <b>हमेशा यही रहेगा</b> — PIN बदलने से नहीं बदलता; सिर्फ़ Settings से नया कोड बनाने पर बदलेगा। Image के अलावा कोड को diary/कागज़ पर भी लिख लें — image delete हो जाए तो भी काम आएगा। कोड किसी को न दें।</span><button type="button" class="btn btn-ghost btn-sm" id="lcCopyRecovery">कोड कॉपी करें</button><button type="button" class="btn btn-ghost btn-sm" id="lcDlRecoveryTxt">कोड की Text file भी डाउनलोड करें</button></div>` : ''}
       <div class="lc-actions">
         <a class="btn btn-primary" id="lcDl" download="${esc(fileName)}" href="${dataUrl}">इमेज फिर डाउनलोड करें</a>
         <button class="btn btn-ghost" id="lcClose2">बंद करें</button>
@@ -767,6 +767,22 @@ function showLoginCardModal(dataUrl, fileName, name, first, recoveryCode, userna
   const copyBtn = document.getElementById('lcCopyRecovery');
   if (copyBtn && recoveryCode) copyBtn.addEventListener('click', async () => {
     toast(await copyText(recoveryCode) ? 'रिकवरी कोड कॉपी हो गया — सुरक्षित जगह रख दें' : 'कॉपी नहीं हुआ — कोड कार्ड पर लिखा है', 'ok');
+  });
+  const dlTxt = document.getElementById('lcDlRecoveryTxt');
+  if (dlTxt && recoveryCode) dlTxt.addEventListener('click', () => {
+    const txt = [
+      'A2Z Janmat — मेरा लॉगिन विवरण (गुप्त रखें)',
+      'नाम: ' + name,
+      username ? 'Username: @' + username : '',
+      'गुप्त रिकवरी कोड: ' + recoveryCode,
+      '',
+      'PIN आपने खुद चुना था — सुरक्षा के लिए यहाँ नहीं लिखा है।',
+      'PIN भूल जाएँ तो लॉगिन पेज पर "PIN भूल गए" से यही कोड लगेगा।',
+      'यह कोड हमेशा यही रहेगा; सिर्फ़ Settings से नया कोड बनाने पर बदलेगा।',
+      'यह कोड/file किसी को न दें और कहीं सार्वजनिक जगह न डालें।',
+    ].filter(Boolean).join('\n');
+    downloadFile('janmat-recovery-' + (username || 'code') + '.txt', txt, 'text/plain;charset=utf-8');
+    toast('रिकवरी कोड की text file डाउनलोड हुई — image के अलावा इसे भी सुरक्षित जगह रखें', 'ok');
   });
 }
 
@@ -826,6 +842,12 @@ async function checkUsernameNow(input, statusEl) {
     input.dataset.usernameState = 'invalid';
     statusEl.innerHTML = '<span class="u-bad">⚠ ' + esc(err) + '</span>';
     return { available: false, valid: false, error: err, username: u };
+  }
+  if (input.dataset.skipAvailability === '1') {
+    /* खाता-वापसी आवेदन: username पहले से लिया हुआ ही सही है (अपना पुराना खाता) */
+    input.dataset.usernameState = 'skipped';
+    statusEl.innerHTML = '<span class="u-wait">खाता-वापसी: अपना मौजूदा (पुराना) username ही लिखें — मंज़ूरी के बाद उसी खाते पर नया PIN लगेगा।</span>';
+    return { available: true, valid: true, skipped: true, username: u };
   }
   const seq = (Number(input.dataset.checkSeq || 0) + 1);
   input.dataset.checkSeq = String(seq);
@@ -891,7 +913,7 @@ function applyAuthResponse(res) {
       toast(res.adoptedVotes + ' पहले वाला मेहमान-वोट अब ' + res.user.name + (res.user.username ? ' (@' + res.user.username + ')' : '') + ' से जुड़ गया — गिनती एक ही रहेगी।', 'ok');
     }, 1100);
   }
-  /* 🎴 रिकवरी कोड वाला लॉगिन कार्ड — सिर्फ़ खाता बनते/claim/recovery पर */
+  /* 🎴 रिकवरी कोड वाला लॉगिन कार्ड — खाता बनते/claim पर (recovery पर कोड वही रहता है) */
   if (res.recoveryCode) {
     try { openLoginCard(res.user.name, { first: true, recoveryCode: res.recoveryCode, username: res.user.username }); } catch (_) {}
   } else if (res.user && !res.user.username) {
@@ -1074,6 +1096,7 @@ function loginCardHTML(opts = {}) {
         <input id="inlineOldPinConfirm" type="password" inputmode="numeric" placeholder="वही PIN दोबारा लिखें" maxlength="10" aria-label="नया PIN दोबारा" autocomplete="new-password" />
       </div>
 
+      <div id="inlineAuthError" class="auth-error" role="alert" aria-live="polite" hidden></div>
       <button class="btn btn-primary" type="submit" id="inlineLoginBtn">लॉगिन करें</button>
     </form>
 
@@ -1084,16 +1107,18 @@ function loginCardHTML(opts = {}) {
 
     <div id="inlineRecover" class="recover-box" hidden>
       <h4>🔑 रिकवरी कोड से नया PIN</h4>
-      <p class="muted small">अपना <b>username</b>, लॉगिन कार्ड पर लिखा <b>गुप्त रिकवरी कोड</b> और नया 6–10 अंकों का PIN डालें। सिर्फ़ username से PIN नहीं बदलेगा — कोड ज़रूरी है।</p>
+      <p class="muted small">अपना <b>username</b>, लॉगिन कार्ड पर लिखा <b>गुप्त रिकवरी कोड</b> और नया 6–10 अंकों का PIN डालें। सिर्फ़ username से PIN नहीं बदलेगा — कोड ज़रूरी है। <b>कोड सफल होने के बाद भी वही रहता है</b> — यही कार्ड हमेशा चलेगा।</p>
       <input id="inlineRecoverUsername" type="text" placeholder="आपका username" maxlength="20" aria-label="रिकवरी के लिए username" autocomplete="username" autocapitalize="none" spellcheck="false" />
       <input id="inlineRecoveryCode" type="text" placeholder="रिकवरी कोड (जैसे ABCD-EFGH-JKLM)" maxlength="20" aria-label="रिकवरी कोड" autocomplete="off" style="text-transform:uppercase" />
       <input id="inlineNewPassword" type="password" inputmode="numeric" placeholder="नया PIN (6–10 अंक)" maxlength="10" aria-label="नया PIN" autocomplete="new-password" />
       <input id="inlineNewPasswordConfirm" type="password" inputmode="numeric" placeholder="नया PIN दोबारा" maxlength="10" aria-label="नया PIN दोबारा" autocomplete="new-password" />
-      <button type="button" class="btn btn-dark" id="inlineRecoverBtn">रिकवरी कोड से लॉगिन करें</button>
+      <div id="inlineRecoverError" class="auth-error" role="alert" aria-live="polite" hidden></div>
+      <button type="button" class="btn btn-dark" id="inlineRecoverBtn">रिकवरी कोड से नया PIN बनाएँ</button>
+      <p class="muted small">🖼️ <b>कार्ड/image ही खो गया या delete हो गया?</b> चिंता न करें — नीचे <b>“खाता वापसी आवेदन”</b> भेजें। Team Janmat जाँचकर मंज़ूरी देगी, फिर आपके <b>उसी पुराने खाते</b> पर नया PIN लग जाएगा (नया खाता नहीं बनेगा; आपके बनाए चुनाव और वोट सुरक्षित रहेंगे)।</p>
     </div>
 
     <div id="inlineAppeal" class="recover-box appeal-box" hidden>
-      <h4>🙋 Username भूल गए या साझा फ़ोन?</h4>
+      <h4>🙋 Username भूल गए, साझा फ़ोन, या कार्ड खो गया?</h4>
       <p class="muted small">पहले इसी फ़ोन से जुड़े खाते का छिपा संकेत देखिए। फिर भी याद न आए, तो नीचे आवेदन भेजिए — खाता तुरंत नहीं बनेगा; <b>Team Janmat जाँचकर मंज़ूरी देगी</b>, तब तक आवेदन Pending रहेगा।</p>
       <button type="button" class="btn btn-ghost btn-sm" id="inlineHintBtn">इस फ़ोन का username-संकेत देखें</button>
       <div id="inlineHintResult" class="appeal-result" aria-live="polite"></div>
@@ -1102,6 +1127,7 @@ function loginCardHTML(opts = {}) {
       <select id="inlineAppealKind" aria-label="आवेदन की वजह">
         <option value="forgot-username">मैं अपना username भूल गया/गई</option>
         <option value="device-second-account">यही फ़ोन परिवार के दूसरे सदस्य का भी है — अलग खाता चाहिए</option>
+        <option value="lost-pin-recovery">PIN भी भूल गया/गई और रिकवरी कार्ड (image) भी खो गया — मेरा पुराना खाता वापस चाहिए</option>
       </select>
       <input id="inlineAppealName" type="text" placeholder="आपका असली नाम" maxlength="30" aria-label="आवेदन के लिए नाम" autocomplete="name" />
       <input id="inlineAppealUsername" type="text" placeholder="चाहा गया नया username" maxlength="20" aria-label="चाहा गया username" autocomplete="username" autocapitalize="none" spellcheck="false" />
@@ -1162,6 +1188,22 @@ function bindLoginCard(onDone) {
   const note = byId('inlineAuthNote');
   let mode = 'login';
 
+  /* ❗ गलती का कारण form के अंदर स्थायी लाल box में — toast उड़ जाने के बाद भी
+     उपयोगकर्ता पढ़ सके कि login/PIN क्यों नहीं बना। */
+  const showAuthError = (msg, id, scroll) => {
+    const el = byId(id || 'inlineAuthError');
+    if (!el) return;
+    el.textContent = '⚠ ' + msg;
+    el.hidden = false;
+    if (scroll !== false) { try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {} }
+  };
+  const clearAuthErrors = () => {
+    ['inlineAuthError', 'inlineRecoverError'].forEach((id) => {
+      const el = byId(id);
+      if (el) { el.hidden = true; el.textContent = ''; }
+    });
+  };
+
   const restrictPin = (el) => {
     if (!el) return;
     el.addEventListener('input', () => { el.value = String(el.value).replace(/[^0-9]/g, '').slice(0, 10); });
@@ -1197,6 +1239,7 @@ function bindLoginCard(onDone) {
   };
 
   const setMode = (m) => {
+    clearAuthErrors();
     mode = (m === 'register' || m === 'old') ? m : 'login';
     $$('.auth-tab', form).forEach((b) => b.classList.toggle('active', b.dataset.authMode === mode));
     byId('authLoginFields').hidden = mode !== 'login';
@@ -1230,6 +1273,7 @@ function bindLoginCard(onDone) {
   });
   const recBtn = byId('inlineRecoverBtn');
   if (recBtn) recBtn.addEventListener('click', async () => {
+    clearAuthErrors();
     recBtn.disabled = true;
     recBtn.textContent = 'जाँच रहे हैं…';
     try {
@@ -1237,16 +1281,24 @@ function bindLoginCard(onDone) {
       const uErr = usernameErrorClient(username);
       if (uErr) throw new Error(uErr);
       const code = byId('inlineRecoveryCode').value.trim();
-      if (!code) throw new Error('लॉगिन कार्ड वाला रिकवरी कोड लिखें।');
+      if (!code) throw new Error('कारण: रिकवरी कोड लिखा ही नहीं। लॉगिन कार्ड पर लिखा गुप्त कोड यहाँ लिखें।');
+      const codeNorm = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (codeNorm.length !== 12) throw new Error('कारण: रिकवरी कोड अधूरा है — कोड कुल 12 अक्षरों का होता है (जैसे ABCD-EFGH-JKLM), आपने ' + codeNorm.length + ' अक्षर लिखे हैं। कार्ड देखकर पूरा कोड लिखें।');
       const newPw = checkPinPair(byId('inlineNewPassword'), byId('inlineNewPasswordConfirm'), username);
       const res = await recoverWithCode(username, code, newPw);
-      toast('PIN बदल गया — स्वागत है, ' + res.user.name + ' (@' + res.user.username + ')! नया कार्ड सँभाल लें।', 'ok');
+      toast('नया PIN बन गया — स्वागत है, ' + res.user.name + ' (@' + res.user.username + ')! आपका रिकवरी कोड वही पुराना ही रहेगा — वही कार्ड सँभालकर रखें।', 'ok');
       if (onDone) onDone();
     } catch (e) {
       toast(e.message, 'err');
+      showAuthError(e.message, 'inlineRecoverError');
+      if (e.code === 'RECOVERY_NOT_SET') {
+        const k = byId('inlineAppealKind');
+        if (k) { k.value = 'lost-pin-recovery'; k.dispatchEvent(new Event('change')); }
+        openAppeal();
+      }
     }
     recBtn.disabled = false;
-    recBtn.textContent = 'रिकवरी कोड से लॉगिन करें';
+    recBtn.textContent = 'रिकवरी कोड से नया PIN बनाएँ';
   });
 
   const forgotUsername = byId('inlineForgotUsername');
@@ -1284,6 +1336,22 @@ function bindLoginCard(onDone) {
     hintBtn.textContent = 'इस फ़ोन का username-संकेत देखें';
   });
 
+  const appealKindSel = byId('inlineAppealKind');
+  if (appealKindSel) appealKindSel.addEventListener('change', () => {
+    const unameInput = byId('inlineAppealUsername');
+    const status = byId('inlineAppealUsernameStatus');
+    const lost = appealKindSel.value === 'lost-pin-recovery';
+    if (unameInput) {
+      unameInput.dataset.skipAvailability = lost ? '1' : '0';
+      unameInput.placeholder = lost ? 'आपका पुराना username (जिसका खाता वापस चाहिए)' : 'चाहा गया नया username';
+      delete unameInput.dataset.usernameState;
+    }
+    if (status) status.innerHTML = lost
+      ? '<span class="u-wait">खाता-वापसी: अपना मौजूदा (पुराना) username लिखें। मंज़ूरी के बाद उसी खाते पर नया PIN लगेगा — नया खाता नहीं बनेगा।</span>'
+      : '';
+    if (!lost && unameInput && unameInput.value) checkUsernameNow(unameInput, status);
+  });
+
   const applyBtn = byId('inlineApplyBtn');
   if (applyBtn) applyBtn.addEventListener('click', async () => {
     applyBtn.disabled = true;
@@ -1292,7 +1360,16 @@ function bindLoginCard(onDone) {
     try {
       const name = byId('inlineAppealName').value.trim();
       if (name.length < 2) throw new Error('अपना असली नाम लिखें।');
-      const username = await ensureAvailable(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
+      let username;
+      if (byId('inlineAppealKind').value === 'lost-pin-recovery') {
+        /* खाता-वापसी में username "खाली" नहीं, अपना मौजूद पुराना username चाहिए */
+        username = normalizeUsernameClient(byId('inlineAppealUsername').value);
+        byId('inlineAppealUsername').value = username;
+        const uErr2 = usernameErrorClient(username);
+        if (uErr2) throw new Error(uErr2);
+      } else {
+        username = await ensureAvailable(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
+      }
       const pin = checkPinPair(byId('inlineAppealPin'), byId('inlineAppealPinConfirm'), username);
       const reason = byId('inlineAppealReason').value.trim();
       if (reason.length < 8) throw new Error('कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर)।');
@@ -1328,6 +1405,7 @@ function bindLoginCard(onDone) {
       toast('आवेदन Team Janmat के पास Pending है। रसीद और रिकवरी कोड सँभाल लें।', 'ok');
     } catch (e) {
       toast(e.message, 'err');
+      if (out) out.textContent = '❌ ' + e.message;
       if (e.code === 'USERNAME_TAKEN') checkUsernameNow(byId('inlineAppealUsername'), byId('inlineAppealUsernameStatus'));
       if (e.data && e.data.applicationId) {
         byId('inlineAppId').value = e.data.applicationId;
@@ -1365,6 +1443,7 @@ function bindLoginCard(onDone) {
   if (loginUsername) loginUsername.focus();
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
+    clearAuthErrors();
     btn.disabled = true;
     const originalText = btn.textContent;
     btn.textContent = mode === 'register' ? 'खाता बना रहे हैं…' : mode === 'old' ? 'पुराना खाता जोड़ रहे हैं…' : 'लॉगिन…';
@@ -1414,6 +1493,8 @@ function bindLoginCard(onDone) {
       } else if (e.code === 'ACCOUNT_PENDING') {
         openAppeal();
       }
+      /* कारण form के अंदर स्थायी रूप से भी दिखे — toast उड़ जाने के बाद भी पढ़ सके */
+      showAuthError(e.message, 'inlineAuthError', !(e.code === 'DEVICE_HAS_ACCOUNT' || e.code === 'ACCOUNT_PENDING'));
     }
     btn.disabled = false;
     btn.textContent = mode === 'register'
@@ -1967,24 +2048,92 @@ function quotaBannerHTML(q) {
 }
 
 /* =====================================================================
-   📱 कीबोर्ड-रक्षक (मोबाइल भाषा-स्विच bug का इलाज)
+   📱 कीबोर्ड भाषा-सहायता (Chrome 154–157 का ज्ञात Gboard bug)
    ---------------------------------------------------------------------
-   कुछ Android फ़ोनों पर कीबोर्ड की भाषा बदलते समय (English ↔ हिन्दी,
-   spacebar दबाकर रखने/🌐 से) कीबोर्ड की ऊँचाई बदलती है और उसी क्षण
-   browser लिखने वाले खाने से focus छीन लेता है — कीबोर्ड नीचे चला जाता है
-   और भाषा बदल ही नहीं पाती। यह रक्षक उसी खाने को तुरंत वापस focus करता है।
-   सुरक्षा-वाल्व: सिर्फ़ तब जब focus कीबोर्ड-resize के आसपास ही गुम हुआ हो,
-   उपयोगकर्ता ने खुद बाहर tap न किया हो, और बार-बार न हो रहा हो।
+   Chromium 154–157 में Gboard का language-selection popup native window
+   focus लेते ही Chrome keyboard को छिपा देता है; popup भी उसी के साथ बंद
+   हो जाता है। यह native browser bug किसी website के JavaScript से पूरी
+   तरह ठीक नहीं हो सकता — page उस popup को खुला रखने का आदेश नहीं दे सकता।
+   इसलिए site अब तीन सुरक्षित काम करती है:
+   1) keyboard/window transition के दौरान focus या caret से बिल्कुल नहीं
+      लड़ती, ताकि page खुद Gboard popup को बंद न करे;
+   2) window focus लौटने और viewport स्थिर होने के बाद, यदि DOM focus सच
+      में गुम हुआ हो, तो वही खाना व caret एक बार वापस लाती है;
+   3) प्रभावित Chrome versions पर उपयोगकर्ता को spacebar hold करने के
+      बजाय 🌐 Globe को एक बार tap करने का कामकाजी तरीका दिखाती है।
    ===================================================================== */
+function chromiumKeyboardBugMajor() {
+  try {
+    const ua = navigator.userAgent || '';
+    if (!/Android/i.test(ua)) return 0;
+    const match = /(?:Chrome|Chromium)\/(\d+)\./i.exec(ua);
+    const major = match ? Number(match[1]) : 0;
+    return major >= 154 && major <= 157 ? major : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function keyboardLanguageTipHTML() {
+  const major = chromiumKeyboardBugMajor();
+  if (!major) return '';
+  try {
+    if (localStorage.getItem('janmat_keyboard_tip_v822') === '1') return '';
+  } catch (_) {}
+  return `
+    <div class="keyboard-tip" id="keyboardLanguageTip" role="note">
+      <div>
+        ⌨️ <b>Chrome ${major} कीबोर्ड सूचना:</b> इस Chrome version में
+        <b>spacebar दबाकर रखने</b> से भाषा वाला popup और keyboard बंद हो सकता है।
+        भाषा बदलने के लिए spacebar के पास वाले <b>🌐 Globe बटन को सिर्फ़ एक बार tap करें — hold न करें</b>।
+        🌐 न दिखे तो Gboard Settings → Preferences → <b>Language switch key</b> चालू करें।
+      </div>
+      <button type="button" id="keyboardTipClose">समझ आ गया</button>
+    </div>`;
+}
+
+function bindKeyboardLanguageTip() {
+  const tip = document.getElementById('keyboardLanguageTip');
+  const btn = document.getElementById('keyboardTipClose');
+  if (!tip || !btn) return;
+  btn.addEventListener('click', () => {
+    try { localStorage.setItem('janmat_keyboard_tip_v822', '1'); } catch (_) {}
+    tip.remove();
+  });
+}
+
 function keepFormFocus(form) {
   if (!form || form.__focusKeeper) return;
   form.__focusKeeper = true;
   const vv = window.visualViewport;
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const signal = ac ? ac.signal : undefined;
   let lastField = null;
+  let snapshot = null;
   let lostAt = 0;
   let resizeAt = 0;
   let outsideTapAt = 0;
+  let windowBlurAt = 0;
+  let composing = false;
+  let restoreTimer = 0;
   let restores = [];
+
+  const on = (target, type, fn, options) => {
+    if (!target || !target.addEventListener) return;
+    const opts = typeof options === 'object' && options ? { ...options } : options ? { capture: true } : {};
+    if (signal) opts.signal = signal;
+    target.addEventListener(type, fn, opts);
+  };
+  const cleanup = () => {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = 0;
+    if (ac) { try { ac.abort(); } catch (_) {} }
+  };
+  const alive = () => {
+    if (form.isConnected) return true;
+    cleanup();
+    return false;
+  };
 
   const isEditable = (el) => !!el && form.contains(el) &&
     (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' ||
@@ -2002,63 +2151,138 @@ function keepFormFocus(form) {
     return null;
   };
 
-  const tryRestore = (source) => {
-    if (!lastField || !lostAt) return;
+  const capture = (el) => {
+    if (!isEditable(el)) return;
+    let start = null;
+    let end = null;
+    let direction = null;
+    try {
+      if (typeof el.selectionStart === 'number') start = el.selectionStart;
+      if (typeof el.selectionEnd === 'number') end = el.selectionEnd;
+      direction = el.selectionDirection || null;
+    } catch (_) {}
+    snapshot = { field: el, start, end, direction, at: Date.now() };
+  };
+
+  const scheduleRestore = (delay = 450) => {
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = setTimeout(tryRestore, delay);
+  };
+
+  const tryRestore = () => {
+    restoreTimer = 0;
+    if (!alive() || !lastField || !lostAt || composing || document.hidden) return;
+    /* Native Gboard/system popup खुला हो सकता है — page focus वापस न छीने। */
+    if (document.hasFocus && !document.hasFocus()) return;
+
     const now = Date.now();
+    /* Keyboard की ऊँचाई बदलनी पूरी होने तक बिल्कुल हस्तक्षेप नहीं। */
+    if (resizeAt && now - resizeAt < 400) {
+      scheduleRestore(420 - (now - resizeAt));
+      return;
+    }
+
     const act = document.activeElement;
-    /* focus किसी और बटन/खाने पर सही सलामत हो — बिल्कुल न टोको */
+    /* Field या कोई और control focus में है — IME/page से लड़ना नहीं है। */
     if (act && act !== document.body && act !== document.documentElement) return;
-    /* उपयोगकर्ता ने खुद बाहर tap करके हटाया हो — सम्मान करो */
-    if (outsideTapAt && Math.abs(lostAt - outsideTapAt) < 1200) return;
-    const recentLoss = (now - lostAt) < 1000;
-    const recentResize = resizeAt && (now - resizeAt) < 1000;
-    if (source === 'focusout' && !recentResize) return;
-    if (source === 'resize' && !recentLoss) return;
-    if (!recentLoss) return;
-    /* 6 सेकंड में 4 से ज़्यादा वापसी हो चुकी हो — छोड़ दो, उपयोगकर्ता फँसे नहीं */
-    restores = restores.filter((x) => now - x < 6000);
-    if (restores.length >= 4) return;
+    if (outsideTapAt && Math.abs(lostAt - outsideTapAt) < 1500) return;
+
+    const nativeWindowLoss = windowBlurAt && Math.abs(windowBlurAt - lostAt) < 2000;
+    const keyboardResizeLoss = resizeAt && Math.abs(resizeAt - lostAt) < 2000;
+    if (!nativeWindowLoss && !keyboardResizeLoss) return;
+    if (now - lostAt > (nativeWindowLoss ? 30000 : 5000)) return;
+
+    restores = restores.filter((x) => now - x < 10000);
+    if (restores.length >= 3) return;
+
     const el = refind(lastField);
     if (!el || el.disabled || el.readOnly) return;
+    const saved = snapshot && (snapshot.field === lastField || snapshot.field === el) ? snapshot : null;
     restores.push(now);
     lostAt = 0;
+    windowBlurAt = 0;
     lastField = el;
-    const val = typeof el.value === 'string' ? el.value : '';
+
     try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (_2) {} }
     try {
-      if (el.setSelectionRange && /^(text|search|tel|url|password|)$/i.test(el.type || 'text') && el.tagName !== 'SELECT') {
-        el.setSelectionRange(val.length, val.length);
+      if (saved && typeof saved.start === 'number' && typeof saved.end === 'number' &&
+          el.setSelectionRange && el.tagName !== 'SELECT') {
+        const len = typeof el.value === 'string' ? el.value.length : saved.end;
+        el.setSelectionRange(Math.min(saved.start, len), Math.min(saved.end, len), saved.direction || undefined);
       }
     } catch (_) {}
   };
 
-  form.addEventListener('focusin', (ev) => {
-    if (!isEditable(ev.target)) return;
+  on(form, 'focusin', (ev) => {
+    if (!alive() || !isEditable(ev.target)) return;
     lastField = ev.target;
     lostAt = 0;
+    outsideTapAt = 0;
+    windowBlurAt = 0;
+    capture(lastField);
     if (lastField.classList && (lastField.classList.contains('c-name') || lastField.classList.contains('c-party'))) {
       const cls = lastField.classList.contains('c-name') ? 'c-name' : 'c-party';
       lastField.__candIdx = Array.prototype.indexOf.call(form.querySelectorAll('.' + cls), lastField);
     }
   });
-  form.addEventListener('focusout', (ev) => {
-    if (!isEditable(ev.target)) return;
-    /* उसी फ़ॉर्म के अगले खाने पर जाना बिल्कुल ठीक है */
-    if (ev.relatedTarget && form.contains(ev.relatedTarget)) return;
-    lostAt = Date.now();
-    setTimeout(() => tryRestore('focusout'), 70);
-    setTimeout(() => tryRestore('focusout'), 400);
+  on(form, 'input', (ev) => capture(ev.target));
+  on(form, 'keyup', (ev) => capture(ev.target));
+  on(form, 'pointerup', (ev) => capture(ev.target));
+  on(form, 'compositionstart', () => { composing = true; });
+  on(form, 'compositionend', (ev) => {
+    composing = false;
+    capture(ev.target);
+    if (lostAt) scheduleRestore(450);
   });
-  /* बाहर tap = उपयोगकर्ता की अपनी इच्छा (capture से सबसे पहले पता चलता है) */
-  document.addEventListener('pointerdown', (ev) => {
+  on(form, 'focusout', (ev) => {
+    if (!alive() || !isEditable(ev.target)) return;
+    if (ev.relatedTarget && form.contains(ev.relatedTarget)) return;
+    capture(ev.target);
+    lostAt = Date.now();
+    /* Page के पास window focus न हो तो native popup के लौटने तक प्रतीक्षा। */
+    if (!document.hasFocus || document.hasFocus()) scheduleRestore(500);
+  });
+
+  on(document, 'pointerdown', (ev) => {
+    if (!alive()) return;
     const tg = ev.target;
     if (!tg || tg === lastField) return;
-    if (!isEditable(tg)) outsideTapAt = Date.now();
+    if (!isEditable(tg)) {
+      outsideTapAt = Date.now();
+      if (restoreTimer) clearTimeout(restoreTimer);
+      restoreTimer = 0;
+    }
   }, true);
+  on(window, 'blur', () => {
+    if (!alive()) return;
+    windowBlurAt = Date.now();
+    if (lastField) capture(lastField);
+    const act = document.activeElement;
+    if (lastField && !lostAt && (!act || act === document.body || act === document.documentElement)) {
+      lostAt = windowBlurAt;
+    }
+    if (restoreTimer) clearTimeout(restoreTimer);
+    restoreTimer = 0;
+  });
+  on(window, 'focus', () => {
+    if (alive() && lastField && lostAt) scheduleRestore(300);
+  });
+  on(document, 'visibilitychange', () => {
+    if (!alive()) return;
+    if (document.hidden) {
+      if (lastField) capture(lastField);
+      if (restoreTimer) clearTimeout(restoreTimer);
+      restoreTimer = 0;
+    } else if (lastField && lostAt) {
+      scheduleRestore(300);
+    }
+  });
+  on(window, 'pagehide', cleanup);
   if (vv && vv.addEventListener) {
-    vv.addEventListener('resize', () => {
+    on(vv, 'resize', () => {
+      if (!alive()) return;
       resizeAt = Date.now();
-      setTimeout(() => tryRestore('resize'), 70);
+      if (lostAt) scheduleRestore(500);
     });
   }
 }
@@ -2118,6 +2342,7 @@ async function renderCreate() {
         गाँव / कॉलोनी का नाम, ज़िला और राज्य भरिए, उम्मीदवार जोड़िए — और एक लिंक तैयार जिससे दुनिया में कहीं से भी कोई वोट कर सकता है।
       </p>
       ${quotaBannerHTML(quota)}
+      ${keyboardLanguageTipHTML()}
 
       <form class="panel" id="createForm" novalidate>
         <div class="form-grid">
@@ -2200,6 +2425,7 @@ async function renderCreate() {
   </section>`;
 
   keepFormFocus(document.getElementById('createForm'));
+  bindKeyboardLanguageTip();
   const list = document.getElementById('candList');
   document.getElementById('addCand').addEventListener('click', () => {
     if ($$('#candList [data-row]').length >= 40) return toast('ज़्यादा से ज़्यादा 40 उम्मीदवार जोड़ सकते हैं।', 'err');
@@ -3365,7 +3591,7 @@ function renderLogin() {
           <div>${ICON.user}<span><b>नाम सबके अलग-अलग नहीं चाहिए:</b> दस "रमेश" हो सकते हैं; पहचान उनके अलग username से होगी, नाम सिर्फ़ प्रोफ़ाइल में दिखेगा।</span></div>
           <div>${ICON.ballot}<span><b>मेहमान वोट भी चलेगा:</b> लिंक खोलकर बिना खाते वोट दिया जा सकता है। बाद में उसी फ़ोन से signup होने पर वोट उसी username से जुड़ जाएगा, गिनती एक ही रहेगी।</span></div>
           <div>${ICON.clock}<span><b>एक फ़ोन = एक सीधा signup:</b> साझा फ़ोन पर दूसरा खाता Team Janmat की मंज़ूरी (appeal) से बनेगा। हर खाता रोज़ अधिकतम 2 चुनाव बना सकता है।</span></div>
-          <div>${ICON.star || ICON.ballot}<span><b>PIN भूल गए?</b> लॉगिन कार्ड के रिकवरी कोड से नया PIN बनेगा। <b>Username भूल गए?</b> आवेदन भेजें — Team Janmat जाँचकर मंज़ूरी देगी, तब तक Pending रहेगा।</span></div>
+          <div>${ICON.star || ICON.ballot}<span><b>PIN भूल गए?</b> लॉगिन कार्ड के रिकवरी कोड से नया PIN बनेगा — कोड हमेशा वही रहता है। <b>कार्ड ही खो गया?</b> “खाता वापसी आवेदन” भेजें — मंज़ूरी के बाद उसी पुराने खाते पर नया PIN लगेगा। <b>Username भूल गए?</b> आवेदन भेजें — Team Janmat जाँचकर मंज़ूरी देगी, तब तक Pending रहेगा।</span></div>
         </div>
         <p class="login-note">आगे बढ़ने पर आप <a href="#/disclaimer">डिस्क्लेमर व नियम</a> स्वीकार करते हैं।</p>
       </div>
@@ -3512,6 +3738,27 @@ async function renderSettings(tab) {
     changePwBtn.textContent = 'PIN बदलें';
   });
 
+  const recGenBtn = document.getElementById('recGenBtn');
+  if (recGenBtn) recGenBtn.addEventListener('click', async () => {
+    const pwEl = document.getElementById('recGenPw');
+    const errEl = document.getElementById('recGenError');
+    const showErr = (m) => { if (errEl) { errEl.textContent = '⚠ ' + m; errEl.hidden = false; } toast(m, 'err'); };
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    if (!pwEl || !pwEl.value) return showErr('कारण: मौजूदा PIN लिखा ही नहीं। पहले अपना मौजूदा PIN लिखें — बिना PIN के नया कोड नहीं बनेगा।');
+    recGenBtn.disabled = true;
+    recGenBtn.textContent = 'कोड बना रहे हैं…';
+    try {
+      const res = await api('/api/auth/recovery-code', { method: 'POST', body: { currentPassword: pwEl.value } });
+      pwEl.value = '';
+      toast('नया रिकवरी कोड बन गया — पुराना कार्ड अब नहीं चलेगा। नया कार्ड सँभाल लें।', 'ok');
+      openLoginCard(state.user && state.user.name, { first: true, recoveryCode: res.recoveryCode, username: state.user && state.user.username });
+    } catch (e) {
+      showErr(e.message);
+    }
+    recGenBtn.disabled = false;
+    recGenBtn.textContent = 'नया रिकवरी कोड बनाएँ';
+  });
+
   bindCopyButtons();
 
   // theme buttons
@@ -3653,7 +3900,14 @@ function settingsAccountHTML() {
       <input id="newPw2" type="password" inputmode="numeric" placeholder="नया PIN दोबारा" maxlength="10" autocomplete="new-password" aria-label="नया PIN दोबारा" />
       <button class="btn btn-dark" id="changePwBtn" type="button">PIN बदलें</button>
     </div>
-    <p class="muted small" style="margin-top:14px">नोट: दोबारा डाउनलोड किए कार्ड पर रिकवरी कोड नहीं छपता — कोड सिर्फ़ पहले कार्ड पर मिला था, उसे ही सँभालकर रखें।</p>
+    <div class="pw-change">
+      <h3 style="font-size:15px;margin:18px 0 6px">🔑 नया रिकवरी कोड / कार्ड बनाएँ</h3>
+      <p class="muted small" style="margin-bottom:10px">लॉगिन कार्ड (image) खो गया या delete हो गया? अपना मौजूदा PIN डालकर नया कोड बना लीजिए — <b>नया कोड बनते ही पुराना कार्ड बंद हो जाएगा</b>, फिर नया कार्ड डाउनलोड करके सँभाल लें। कार्ड सही-सलामत है तो कुछ करने की ज़रूरत नहीं — कोड वही चलता रहेगा।</p>
+      <input id="recGenPw" type="password" placeholder="मौजूदा PIN / पासवर्ड" maxlength="64" autocomplete="current-password" aria-label="नए रिकवरी कोड के लिए मौजूदा PIN" />
+      <button class="btn btn-dark" id="recGenBtn" type="button">नया रिकवरी कोड बनाएँ</button>
+      <div id="recGenError" class="auth-error" role="alert" hidden></div>
+    </div>
+    <p class="muted small" style="margin-top:14px">नोट: दोबारा डाउनलोड किए कार्ड पर रिकवरी कोड नहीं छपता — कोड सिर्फ़ कार्ड बनते समय मिलता है। कार्ड खो गया हो तो ऊपर से नया कोड बना लें।</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
       <button class="btn btn-primary" id="redownloadCard">🎴 मेरा लॉगिन कार्ड फिर डाउनलोड करें</button>
       <button class="btn btn-ghost" id="logoutBtn2">लॉगआउट करें</button>
@@ -4044,7 +4298,9 @@ async function loadDevApplications() {
 }
 
 function devApplicationKindLabel(k) {
-  return k === 'device-second-account' ? 'साझा फ़ोन पर दूसरा खाता' : 'Username भूल गए';
+  return k === 'device-second-account' ? 'साझा फ़ोन पर दूसरा खाता'
+    : k === 'lost-pin-recovery' ? '🔑 PIN + कार्ड दोनों खो गए (खाता वापसी)'
+    : 'Username भूल गए';
 }
 function devApplicationStatusLabel(s) {
   return s === 'approved' ? '<b style="color:#2fa84f">मंज़ूर</b>'

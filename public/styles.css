@@ -729,6 +729,9 @@ select {
 .linklike { margin-top: 12px; background: none; border: 0; color: var(--indigo); font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer; text-decoration: underline; }
 .recover-box { display: flex; flex-direction: column; gap: 9px; max-width: 480px; margin: 12px auto 0; text-align: left; background: #fff8ec; border: 1px solid #f3ddb4; border-radius: 14px; padding: 14px; }
 .recover-box[hidden] { display: none; }
+.auth-error { background: #fdecec; border: 1px solid #f2b8b5; color: #8f1d18; border-radius: 12px; padding: 11px 13px; font-size: 13.5px; line-height: 1.55; text-align: left; margin: 10px 0; white-space: pre-wrap; }
+.auth-error[hidden] { display: none; }
+:root[data-theme="dark"] .auth-error { background: #33151a; border-color: #7a2b33; color: #ffb4ab; }
 .recovery-show { display: flex; flex-direction: column; gap: 7px; align-items: center; background: #fff8ec; border: 1px solid #f3ddb4; border-radius: 14px; padding: 14px; margin-top: 12px; font-size: 13.5px; color: #7a4b00; }
 .recovery-show code { font-size: 21px; font-weight: 800; letter-spacing: .08em; color: var(--ink); background: #fff; border: 1px dashed #e5b93e; border-radius: 10px; padding: 7px 14px; }
 .pw-change { display: flex; flex-direction: column; gap: 9px; max-width: 420px; }
@@ -1782,4 +1785,50 @@ main#app { flex: 1 0 auto; }
   .auth-tabs-3 .auth-tab { padding: 9px 4px; font-size: 13px; }
   .auth-links { flex-direction: column; gap: 0; }
   .recovery-show code { font-size: 18px; max-width: 100%; overflow-wrap: anywhere; }
+}
+
+/* v8.2.2 — Chrome 154–157 के Gboard language-popup bug की सूचना */
+.keyboard-tip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fff8ec;
+  border: 1px solid #f3ddb4;
+  border-left: 5px solid #ff9d0a;
+  border-radius: 14px;
+  padding: 13px 15px;
+  margin-bottom: 18px;
+  color: #6b4a00;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.keyboard-tip b { color: #5b3d00; }
+.keyboard-tip button {
+  flex: 0 0 auto;
+  border: 1px solid #e5c98f;
+  background: #fff;
+  color: #6b4a00;
+  border-radius: 999px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.keyboard-tip button:hover { border-color: #d99a26; }
+:root[data-theme="dark"] .keyboard-tip {
+  background: #2b2110;
+  border-color: #6b5220;
+  color: #ffd9a0;
+}
+:root[data-theme="dark"] .keyboard-tip b { color: #ffe1ad; }
+:root[data-theme="dark"] .keyboard-tip button {
+  background: #171c38;
+  border-color: #6b5220;
+  color: #ffd9a0;
+}
+@media (max-width: 560px) {
+  .keyboard-tip { flex-direction: column; }
+  .keyboard-tip button { align-self: flex-start; }
 }

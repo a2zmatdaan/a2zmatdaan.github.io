@@ -615,10 +615,24 @@
       var rpin2 = validPin(body.newPassword, runame2);
       var ruser = findUserByUsername(runame2);
       var want = String(body.recoveryCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-      if (!ruser || !isActiveUser(ruser) || want.length !== 12 || !ruser.recoveryHash || !checkPreview(want, ruser.recoveryHash)) throw err('रिकवरी कोड सही नहीं है (या इस username का खाता नहीं है)। लॉगिन कार्ड पर लिखा कोड ठीक वैसा ही लिखें।', 401, 'INVALID_RECOVERY');
-      var rc2 = setPreviewPassword(ruser, rpin2);
+      if (!ruser) throw err('कारण: इस username (@' + runame2 + ') का कोई खाता ही नहीं मिला। username की spelling ध्यान से देखें — लॉगिन कार्ड पर लिखा username बिल्कुल वैसा ही लिखें।', 401, 'ACCOUNT_NOT_FOUND');
+      if (!isActiveUser(ruser)) throw err('कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।', 401, 'ACCOUNT_INACTIVE');
+      if (want.length !== 12) throw err('कारण: रिकवरी कोड अधूरा लिखा है। कोड कुल 12 अक्षरों का होता है (जैसे ABCD-EFGH-JKLM) — आपने ' + want.length + ' अक्षर लिखे हैं। कार्ड देखकर पूरा कोड लिखें।', 400, 'RECOVERY_CODE_FORMAT');
+      if (!ruser.recoveryHash) throw err('कारण: इस (पुराने) खाते पर रिकवरी कोड सेट ही नहीं है। नीचे "खाता वापसी आवेदन" भेजें — Team Janmat जाँचकर आपके उसी खाते पर नया PIN लगा देगी।', 401, 'RECOVERY_NOT_SET');
+      if (!checkPreview(want, ruser.recoveryHash)) throw err('कारण: यह रिकवरी कोड इस खाते के मौजूदा कोड से मेल नहीं खाता। एक भी अक्षर गलत हो तो कोड नहीं चलेगा (कोड में O, I, 0, 1 होते ही नहीं)। अगर आपको पहले कभी नया कार्ड मिला था या आपने Settings से नया कोड बनाया था, तो वही सबसे नया कोड लगेगा — पुराना कार्ड नहीं चलेगा। कार्ड ही खो गया हो तो नीचे "खाता वापसी आवेदन" भेजें।', 401, 'RECOVERY_CODE_WRONG');
+      var rsalt2 = rid(8);
+      ruser.pwHash = rsalt2 + ':' + hashPreview(rpin2, rsalt2);   /* v8.2.3: कोड वही रहता है, नया कार्ड नहीं */
       ruser.tokens = {};
-      return finishAuth(ruser, { recovered: true, recoveryCode: rc2 });
+      return finishAuth(ruser, { recovered: true, recoveryCodeKept: true });
+    }
+
+    if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'recovery-code') {
+      if (!viewer) throw err('कारण: लॉगिन नहीं है। नया रिकवरी कोड सिर्फ़ अपने खाते में लॉगिन के बाद बनता है।', 401, 'LOGIN_REQUIRED');
+      if (!checkPreview(String(body.currentPassword || ''), viewer.pwHash)) throw err('कारण: मौजूदा PIN सही नहीं है, इसलिए नया कोड नहीं बना। ध्यान से दोबारा लिखें।', 401, 'WRONG_PASSWORD');
+      var ncode = makeRecovery();
+      viewer.recoveryHash = previewHash(ncode.replace(/[^A-Z0-9]/g, ''));
+      save();
+      return { ok: true, recoveryCode: ncode, user: pubUser(viewer), message: 'नया रिकवरी कोड बन गया। पुराना कोड अब नहीं चलेगा — नया कार्ड/कोड सँभाल लें।' };
     }
 
     if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'username-hint') {
@@ -629,29 +643,43 @@
     }
 
     if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'apply') {
-      var akind = body.kind === 'device-second-account' ? 'device-second-account' : 'forgot-username';
+      var akind = body.kind === 'device-second-account' ? 'device-second-account' : body.kind === 'lost-pin-recovery' ? 'lost-pin-recovery' : 'forgot-username';
       var aname = validName(body);
       var auname = validUsername(body);
       var apin = validPin(body.password, auname);
       var areason = clean(body.reason, 300);
       if (areason.length < 8) throw err('कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर) — जैसे "पुराना username भूल गया, फ़ोन यही है"।');
-      if (usernameTaken(auname)) throw err('यह username (@' + auname + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', 409, 'USERNAME_TAKEN', { suggestions: usernameSuggestions(auname) });
+      var lostT = null;
+      if (akind === 'lost-pin-recovery') {
+        lostT = findUserByUsername(auname);
+        if (!lostT || !isActiveUser(lostT)) throw err('कारण: इस username (@' + auname + ') का कोई चालू खाता नहीं मिला। वही username लिखें जो आपके खाते पर था — spelling ध्यान से देखें।', 404, 'ACCOUNT_NOT_FOUND');
+      } else if (usernameTaken(auname)) throw err('यह username (@' + auname + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', 409, 'USERNAME_TAKEN', { suggestions: usernameSuggestions(auname) });
       syncApplications();
       var dupApp = null;
       db.accountApplications.forEach(function (a) { if (a && a.status === 'pending' && a.device === deviceKey && a.desiredUsername === auname) dupApp = a; });
       if (dupApp) throw err('इसी username का आपका आवेदन पहले से जाँच में है। आवेदन नंबर: ' + dupApp.id, 409, 'APPLICATION_PENDING', { applicationId: dupApp.id });
+      if (akind === 'lost-pin-recovery') {
+        var dupL = null;
+        db.accountApplications.forEach(function (a) { if (a && a.status === 'pending' && a.kind === 'lost-pin-recovery' && a.desiredUsername === auname) dupL = a; });
+        if (dupL) throw err('कारण: इस खाते (@' + auname + ') की वापसी का आवेदन पहले से जाँच में है। आवेदन नंबर: ' + dupL.id + ' — स्थिति नीचे देख सकते हैं।', 409, 'APPLICATION_PENDING', { applicationId: dupL.id });
+      }
       var areceipt = rid(14);
       var arecovery = makeRecovery();
+      var aconf = deviceConflictUsers(deviceKey, fpKey).map(function (u) { return u.id; });
+      if (lostT && aconf.indexOf(lostT.id) === -1) aconf.push(lostT.id);
       var newApp = {
         id: 'APP-' + rid(4).toUpperCase(), kind: akind, name: aname, desiredUsername: auname,
         pwHash: previewHash(apin), recoveryHash: previewHash(arecovery.replace(/[^A-Z0-9]/g, '')),
         receiptHash: hashPreview(areceipt, 'receipt'), reason: areason, device: deviceKey, fp: fpKey || null,
-        conflictUserIds: deviceConflictUsers(deviceKey, fpKey).map(function (u) { return u.id; }),
+        conflictUserIds: aconf,
         status: 'pending', createdAt: Date.now(), expiresAt: Date.now() + 7 * 864e5,
-        decidedAt: null, decisionNote: '', resultingUserId: null, replacedUserId: null
+        decidedAt: null, decisionNote: '', resultingUserId: null, replacedUserId: null,
+        targetUserId: lostT ? lostT.id : null
       };
       db.accountApplications.push(newApp); save();
-      return { ok: true, applicationId: newApp.id, receipt: areceipt, recoveryCode: arecovery, status: 'pending', message: 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।' };
+      return { ok: true, applicationId: newApp.id, receipt: areceipt, recoveryCode: arecovery, status: 'pending', message: akind === 'lost-pin-recovery'
+          ? 'आपका खाता-वापसी आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलते ही आपके पुराने खाते (@' + auname + ') पर यही चुना हुआ नया PIN लग जाएगा और नीचे वाला नया रिकवरी कोड चालू होगा। आवेदन नंबर और कोड सँभालकर रखें।'
+          : 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।' };
     }
 
     if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'application-status') {
@@ -670,7 +698,7 @@
       return {
         ok: true, applicationId: appObj.id, status: appObj.status, username: appObj.desiredUsername, name: appObj.name,
         createdAt: appObj.createdAt, decidedAt: appObj.decidedAt || null, decisionNote: appObj.decisionNote || '',
-        message: appObj.status === 'approved' ? 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।'
+        message: appObj.status === 'approved' ? (appObj.kind === 'lost-pin-recovery' ? 'बधाई हो! आपके पुराने खाते (@' + appObj.desiredUsername + ') पर आवेदन वाला नया PIN लग गया है — उसी PIN से लॉगिन करें।' : 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।')
           : appObj.status === 'rejected' ? 'क्षमा करें, यह आवेदन मंज़ूर नहीं हुआ। कारण ऊपर दिया है।'
           : appObj.status === 'expired' ? 'यह आवेदन 7 दिन पूरे होने पर समाप्त हो गया — चाहें तो फिर से आवेदन भेजें।'
           : 'आपका आवेदन Team Janmat की जाँच में है। मंज़ूरी मिलते ही यहीं पता चल जाएगा।'
@@ -1003,6 +1031,19 @@
         dapp.decisionNote = dnote || 'Team Janmat की जाँच में यह आवेदन मंज़ूर नहीं हो सका।';
         dapp.pwHash = null; dapp.recoveryHash = null; save();
         return { ok: true, applicationId: dapp.id, status: 'rejected' };
+      }
+      if (dapp.kind === 'lost-pin-recovery') {
+        var lt = (dapp.targetUserId && findUserById(dapp.targetUserId)) || findUserByUsername(dapp.desiredUsername);
+        if (!lt) throw err('जिस खाते (@' + dapp.desiredUsername + ') की वापसी माँगी गई थी वह अब नहीं मिला — यह आवेदन अस्वीकार करें।', 404);
+        lt.pwHash = dapp.pwHash; lt.recoveryHash = dapp.recoveryHash;
+        lt.accountStatus = 'active'; lt.tokens = {};
+        if (!lt.devices) lt.devices = {};
+        lt.devices[dapp.device] = Date.now(); db.deviceOwner[dapp.device] = lt.id;
+        if (dapp.fp) db.fpOwner[dapp.fp] = lt.id;
+        recordDeviceAccount(lt, dapp.device, dapp.fp || null);
+        dapp.status = 'approved'; dapp.decidedAt = Date.now(); dapp.decisionNote = dnote;
+        dapp.resultingUserId = lt.id; dapp.replacedUserId = null; dapp.pwHash = null; dapp.recoveryHash = null; save();
+        return { ok: true, applicationId: dapp.id, status: 'approved', resultingUserId: lt.id, username: lt.username, pinReset: true };
       }
       var replaceId = clean(body.replaceUserId, 40);
       var dmode = clean(body.mode, 24);

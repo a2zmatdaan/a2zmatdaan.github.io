@@ -1,6 +1,6 @@
 {
   "name": "janmat",
-  "version": "8.2.1",
+  "version": "8.2.3",
   "private": true,
   "description": "Janmat — Hindi online community voting platform with unique username + PIN login (zero deps, SSE live results, dark mode)",
   "main": "server.js",

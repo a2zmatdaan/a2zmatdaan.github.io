@@ -589,7 +589,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.2.1-audit-fix';
+const APP_VERSION = '8.2.3-recovery-clarity';
 
 function publicElection(e, viewer) {
   const t = tally(e);
@@ -1248,7 +1248,7 @@ async function handleApi(req, res, pathname) {
   /* ---------- लॉगिन: username + PIN ज़रूरी (नाम से लॉगिन अब बिल्कुल बंद) ---------- */
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
     if (!rateLimit(req, 'login', 20, 60000)) {
-      return sendJson(res, 429, { error: 'बहुत ज़्यादा लॉगिन कोशिशें। एक मिनट बाद प्रयास करें।' });
+      return sendJson(res, 429, { error: 'कारण: बहुत ज़्यादा लॉगिन कोशिशें हुई हैं — एक मिनट रुककर प्रयास करें।', code: 'RATE_LIMITED' });
     }
     const body = await readBody(req);
     const uv = validateUsername(body.username);
@@ -1256,7 +1256,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 400, { error: 'अपना सही username लिखें (जैसे pawan_verma) — लॉगिन अब नाम से नहीं, username से होता है।', code: 'USERNAME_REQUIRED' });
     }
     if (!globalRateLimit('login-user:' + sha256(uv.username).slice(0, 16), 30, 10 * 60000)) {
-      return sendJson(res, 429, { error: 'इस username पर बहुत ज़्यादा कोशिशें हुई हैं। 10 मिनट बाद प्रयास करें।' });
+      return sendJson(res, 429, { error: 'कारण: इस username पर बहुत ज़्यादा गलत कोशिशें हुई हैं — सुरक्षा के लिए 10 मिनट बाद प्रयास करें।', code: 'RATE_LIMITED' });
     }
     const password = String(body.password == null ? '' : body.password);
     if (!password) {
@@ -1280,24 +1280,63 @@ async function handleApi(req, res, pathname) {
     return completeAuth(req, res, user, body, {}, 200);
   }
 
-  /* ---------- PIN भूल गए: username + लॉगिन-कार्ड वाला गुप्त रिकवरी कोड ---------- */
+  /* ---------- PIN भूल गए: username + लॉगिन-कार्ड वाला गुप्त रिकवरी कोड ----------
+     v8.2.3: (1) हर गलती का कारण अलग-अलग बताया जाता है, ताकि उपयोगकर्ता को पता चले
+     कि रुकावट कहाँ है। (2) सफल recovery पर कोड अब बदला (rotate) नहीं जाता — वही
+     कार्ड हमेशा चलेगा; नया कार्ड संभालने का भ्रम ख़त्म। नया कोड उपयोगकर्ता खुद
+     Settings से जब चाहे बना सकता है (/api/auth/recovery-code)। */
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'recover') {
     if (!rateLimit(req, 'recover', 5, 10 * 60000) || !globalRateLimit('recover', 30, 10 * 60000)) {
-      return sendJson(res, 429, { error: 'बहुत ज़्यादा कोशिशें। 10 मिनट बाद प्रयास करें।' });
+      return sendJson(res, 429, { error: 'कारण: बहुत ज़्यादा कोशिशें हो चुकी हैं — सुरक्षा के लिए रिकवरी कुछ देर रुकी है। 10 मिनट रुककर एक बार ध्यान से प्रयास करें, बार-बार न दबाएँ।', code: 'RATE_LIMITED' });
     }
     const body = await readBody(req);
     const uv = validateUsername(body.username);
-    if (uv.error) return sendJson(res, 400, { error: 'पहले अपना सही username लिखें।' });
+    if (uv.error) return sendJson(res, 400, { error: 'कारण: username ठीक से नहीं लिखा गया। अपना सही username लिखें (जैसे pawan_verma)।', code: 'USERNAME_INVALID' });
     const pv = validatePin(body.newPassword, uv.username);
-    if (pv.error) return sendJson(res, 400, { error: pv.error });
+    if (pv.error) return sendJson(res, 400, { error: 'नया PIN नहीं बन पाया — ' + pv.error, code: 'PIN_INVALID' });
     const user = findUserByUsername(uv.username);
-    const code = normalizeRecovery(body.recoveryCode);
-    if (!user || !isActiveUser(user) || code.length !== 12 || !user.recoveryHash || !verifySecret(code, user.recoveryHash)) {
-      return sendJson(res, 401, { error: 'रिकवरी कोड सही नहीं है (या इस username का खाता नहीं है)। लॉगिन कार्ड पर लिखा कोड ठीक वैसा ही लिखें।', code: 'INVALID_RECOVERY' });
+    if (!user) {
+      return sendJson(res, 401, { error: 'कारण: इस username (@' + uv.username + ') का कोई खाता ही नहीं मिला। username की spelling ध्यान से देखें — लॉगिन कार्ड पर लिखा username बिल्कुल वैसा ही लिखें।', code: 'ACCOUNT_NOT_FOUND' });
     }
-    const recoveryCode = setPasswordAndRecovery(user, pv.password);   /* पुराना कोड अब बेकार, नया मिलेगा */
-    user.tokens = {};   /* बाकी सब जगह से लॉगआउट */
-    return completeAuth(req, res, user, body, { recovered: true, recoveryCode }, 200);
+    if (!isActiveUser(user)) {
+      return sendJson(res, 401, { error: 'कारण: यह खाता अब चालू नहीं है (शायद नए खाते से बदल चुका है)। अपने नए username से प्रयास करें।', code: 'ACCOUNT_INACTIVE' });
+    }
+    const code = normalizeRecovery(body.recoveryCode);
+    if (code.length !== 12) {
+      return sendJson(res, 400, { error: 'कारण: रिकवरी कोड अधूरा लिखा है। कोड कुल 12 अक्षरों का होता है (जैसे ABCD-EFGH-JKLM) — आपने ' + code.length + ' अक्षर लिखे हैं। कार्ड देखकर पूरा कोड लिखें।', code: 'RECOVERY_CODE_FORMAT' });
+    }
+    if (!user.recoveryHash) {
+      return sendJson(res, 401, { error: 'कारण: इस (पुराने) खाते पर रिकवरी कोड सेट ही नहीं है। नीचे "खाता वापसी आवेदन" भेजें — Team Janmat जाँचकर आपके उसी खाते पर नया PIN लगा देगी।', code: 'RECOVERY_NOT_SET' });
+    }
+    if (!verifySecret(code, user.recoveryHash)) {
+      return sendJson(res, 401, { error: 'कारण: यह रिकवरी कोड इस खाते के मौजूदा कोड से मेल नहीं खाता। एक भी अक्षर गलत हो तो कोड नहीं चलेगा (कोड में O, I, 0, 1 होते ही नहीं)। अगर आपको पहले कभी नया कार्ड मिला था या आपने Settings से नया कोड बनाया था, तो वही सबसे नया कोड लगेगा — पुराना कार्ड नहीं चलेगा। कार्ड ही खो गया हो तो नीचे "खाता वापसी आवेदन" भेजें।', code: 'RECOVERY_CODE_WRONG' });
+    }
+    user.pwHash = hashSecret(pv.password);
+    user.pwSetAt = Date.now();
+    user.tokens = {};   /* बाकी सब जगह से लॉगआउट — रिकवरी कोड वही रहता है */
+    return completeAuth(req, res, user, body, { recovered: true, recoveryCodeKept: true }, 200);
+  }
+
+  /* ---------- नया रिकवरी कोड बनाएँ (लॉगिन किया हुआ उपयोगकर्ता, मौजूदा PIN से) ----------
+     कार्ड खो जाए पर PIN याद हो, तो उपयोगकर्ता खुद नया कोड बना सकता है।
+     नया कोड बनते ही पुराना कोड/कार्ड बंद हो जाता है। */
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'recovery-code') {
+    if (!viewer) return sendJson(res, 401, { error: 'कारण: लॉगिन नहीं है। नया रिकवरी कोड सिर्फ़ अपने खाते में लॉगिन के बाद बनता है।', code: 'LOGIN_REQUIRED' });
+    if (!rateLimit(req, 'recgen', 5, 10 * 60000)) {
+      return sendJson(res, 429, { error: 'कारण: बहुत ज़्यादा कोशिशें। कुछ मिनट बाद प्रयास करें।', code: 'RATE_LIMITED' });
+    }
+    const body = await readBody(req);
+    if (!viewer.pwHash) {
+      return sendJson(res, 400, { error: 'कारण: इस खाते पर PIN सेट ही नहीं है — पहले PIN बनाएँ, तभी रिकवरी कोड बनेगा।', code: 'PIN_NOT_SET' });
+    }
+    if (!verifySecret(String(body.currentPassword || ''), viewer.pwHash)) {
+      return sendJson(res, 401, { error: 'कारण: मौजूदा PIN सही नहीं है, इसलिए नया कोड नहीं बना। ध्यान से दोबारा लिखें।', code: 'WRONG_PASSWORD' });
+    }
+    const code = makeRecoveryCode();
+    viewer.recoveryHash = hashSecret(normalizeRecovery(code));
+    viewer.recoverySetAt = Date.now();
+    await saveNow();
+    return sendJson(res, 200, { ok: true, recoveryCode: code, user: publicUser(viewer), message: 'नया रिकवरी कोड बन गया। पुराना कोड अब नहीं चलेगा — नया कार्ड/कोड सँभाल लें।' });
   }
 
   /* ---------- username का संकेत: इसी फ़ोन से जुड़े खाते का छिपा हुआ username ---------- */
@@ -1329,7 +1368,9 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 429, { error: 'बहुत ज़्यादा आवेदन। कुछ मिनट बाद प्रयास करें।' });
     }
     const body = await readBody(req);
-    const kind = body.kind === 'device-second-account' ? 'device-second-account' : 'forgot-username';
+    const kind = body.kind === 'device-second-account' ? 'device-second-account'
+      : body.kind === 'lost-pin-recovery' ? 'lost-pin-recovery'
+      : 'forgot-username';
     const nv = validateName(body.name);
     if (nv.error) return sendJson(res, 400, { error: nv.error });
     const uv = validateUsername(body.username);
@@ -1338,7 +1379,15 @@ async function handleApi(req, res, pathname) {
     if (pv.error) return sendJson(res, 400, { error: pv.error });
     const reason = clean(body.reason, 300);
     if (reason.length < 8) return sendJson(res, 400, { error: 'कारण थोड़ा साफ़ लिखें (कम से कम 8 अक्षर) — जैसे "पुराना username भूल गया, फ़ोन यही है"।' });
-    if (usernameTaken(uv.username)) {
+    /* खाता-वापसी (PIN भी भूला + कार्ड भी खोया): username मौजूद खाते का ही होगा।
+       मंज़ूरी सिर्फ़ डेवलपर देगा; बिना मंज़ूरी खाते पर कुछ नहीं बदलता। */
+    let lostTarget = null;
+    if (kind === 'lost-pin-recovery') {
+      lostTarget = findUserByUsername(uv.username);
+      if (!lostTarget || !isActiveUser(lostTarget)) {
+        return sendJson(res, 404, { error: 'कारण: इस username (@' + uv.username + ') का कोई चालू खाता नहीं मिला। वही username लिखें जो आपके खाते पर था — spelling ध्यान से देखें।', code: 'ACCOUNT_NOT_FOUND' });
+      }
+    } else if (usernameTaken(uv.username)) {
       return sendJson(res, 409, { error: 'यह username (@' + uv.username + ') पहले से उपयोग/जाँच में है — कोई दूसरा चुनें।', code: 'USERNAME_TAKEN', suggestions: usernameSuggestions(uv.username) });
     }
     const device = deviceKeyFrom(req, body.deviceId);
@@ -1348,7 +1397,14 @@ async function handleApi(req, res, pathname) {
     if (duplicate) {
       return sendJson(res, 409, { error: 'इसी username का आपका आवेदन पहले से जाँच में है। आवेदन नंबर: ' + duplicate.id, code: 'APPLICATION_PENDING', applicationId: duplicate.id });
     }
+    if (kind === 'lost-pin-recovery') {
+      const dupLost = db.accountApplications.find((a) => a && a.status === 'pending' && a.kind === 'lost-pin-recovery' && a.desiredUsername === uv.username);
+      if (dupLost) {
+        return sendJson(res, 409, { error: 'कारण: इस खाते (@' + uv.username + ') की वापसी का आवेदन पहले से जाँच में है। आवेदन नंबर: ' + dupLost.id + ' — स्थिति नीचे देख सकते हैं।', code: 'APPLICATION_PENDING', applicationId: dupLost.id });
+      }
+    }
     const conflicts = deviceConflictUsers(device, fp).map((u) => u.id);
+    if (lostTarget && !conflicts.includes(lostTarget.id)) conflicts.push(lostTarget.id);
     const receipt = rid(14);
     const recoveryCode = makeRecoveryCode();
     const app = {
@@ -1370,6 +1426,7 @@ async function handleApi(req, res, pathname) {
       decisionNote: '',
       resultingUserId: null,
       replacedUserId: null,
+      targetUserId: lostTarget ? lostTarget.id : null,   /* सिर्फ़ खाता-वापसी आवेदन पर */
     };
     db.accountApplications.push(app);
     await saveNow();
@@ -1380,7 +1437,9 @@ async function handleApi(req, res, pathname) {
       receipt,
       recoveryCode,
       status: 'pending',
-      message: 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।',
+      message: kind === 'lost-pin-recovery'
+        ? 'आपका खाता-वापसी आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलते ही आपके पुराने खाते (@' + uv.username + ') पर यही चुना हुआ नया PIN लग जाएगा और नीचे वाला नया रिकवरी कोड चालू होगा। आवेदन नंबर और कोड सँभालकर रखें।'
+        : 'आपका आवेदन Team Janmat के पास जाँच में है। मंज़ूरी मिलने पर इसी username + PIN से लॉगिन होगा। रिकवरी कोड और आवेदन नंबर सँभालकर रखें।',
     });
   }
 
@@ -1406,13 +1465,16 @@ async function handleApi(req, res, pathname) {
       ok: true,
       applicationId: app.id,
       status: app.status,
+      kind: app.kind,
       username: app.desiredUsername,
       name: app.name,
       createdAt: app.createdAt,
       decidedAt: app.decidedAt || null,
       decisionNote: app.decisionNote || '',
       message: app.status === 'approved'
-        ? 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।'
+        ? (app.kind === 'lost-pin-recovery'
+          ? 'बधाई हो! आपके पुराने खाते (@' + app.desiredUsername + ') पर आवेदन वाला नया PIN लग गया है — उसी PIN से लॉगिन करें। लॉगिन के बाद Settings से नया रिकवरी कार्ड भी बना लें।'
+          : 'बधाई हो! आपका खाता बन गया है — अब अपने username + PIN से लॉगिन करें।')
         : app.status === 'rejected'
           ? 'क्षमा करें, यह आवेदन मंज़ूर नहीं हुआ। कारण ऊपर दिया है।'
           : app.status === 'expired'
@@ -2238,6 +2300,32 @@ async function handleApi(req, res, pathname) {
       await saveNow();
       broadcastDev('account-application-decision', { at: app.decidedAt, id: app.id, status: 'rejected' });
       return sendJson(res, 200, { ok: true, applicationId: app.id, status: 'rejected' });
+    }
+
+    /* खाता-वापसी (PIN + कार्ड दोनों खो गए): नया खाता नहीं बनता — उसी पुराने
+       खाते पर आवेदन वाला नया PIN और नया रिकवरी कोड लगता है, सारे सत्र बंद। */
+    if (app.kind === 'lost-pin-recovery') {
+      const target = (app.targetUserId && findUserById(app.targetUserId)) || findUserByUsername(app.desiredUsername);
+      if (!target) {
+        return sendJson(res, 404, { error: 'जिस खाते (@' + app.desiredUsername + ') की वापसी माँगी गई थी वह अब नहीं मिला — यह आवेदन अस्वीकार करें।' });
+      }
+      target.pwHash = app.pwHash;
+      target.recoveryHash = app.recoveryHash;
+      target.pwSetAt = Date.now();
+      target.recoverySetAt = Date.now();
+      target.accountStatus = 'active';
+      target.tokens = {};   /* हर जगह से लॉगआउट — प्रवेश सिर्फ़ नए PIN से */
+      if (!target.devices || typeof target.devices !== 'object') target.devices = {};
+      target.devices[app.device] = Date.now();
+      db.deviceOwner[app.device] = target.id;
+      if (app.fp) db.fpOwner[app.fp] = target.id;
+      recordDeviceAccount(target, app.device, app.fp || null);
+      app.status = 'approved'; app.decidedAt = Date.now(); app.decisionNote = note;
+      app.resultingUserId = target.id; app.replacedUserId = null;
+      app.pwHash = null; app.recoveryHash = null;
+      await saveNow();
+      broadcastDev('account-application-decision', { at: app.decidedAt, id: app.id, status: 'approved', username: target.username });
+      return sendJson(res, 200, { ok: true, applicationId: app.id, status: 'approved', resultingUserId: target.id, username: target.username, pinReset: true });
     }
 
     const replaceUserId = clean(body.replaceUserId, 40);

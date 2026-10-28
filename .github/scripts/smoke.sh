@@ -157,6 +157,9 @@ if [ -n "$DTOK" ]; then
   if [ -n "$DELID" ] && [ -n "$DELTOK" ]; then
     DEVDEL=$(curl -s -o /tmp/janmat-dev-delete.json -w '%{http_code}' -X POST "$BASE/api/dev/users/$DELID/moderate" -H 'content-type: application/json' -H "x-dev-token: $DTOK" -d '{"action":"delete","confirm":true,"reason":"CI delete"}')
     [ "$DEVDEL" = "200" ] && ok "डेवलपर ने गलत/परीक्षण खाता हटाया" || bad "डेवलपर delete नहीं हुआ ($DEVDEL)"
+    OVREC=$(curl -fsS "$BASE/api/dev/overview" -H "x-dev-token: $DTOK")
+    [ "$(printf '%s' "$OVREC" | json_get stats.userRecords.deleted)" = "1" ] && [ "$(printf '%s' "$OVREC" | json_get stats.userRecords.developerDeleted)" = "1" ] && ok "हटाए खातों की अलग कुल गिनती" || bad "हटाए खातों की गिनती गलत"
+    printf '%s' "$OVREC" | grep -q 'deletedSnapshot' && printf '%s' "$OVREC" | grep -q 'CI हटाना' && ok "हटाए खाते का नाम/username रिकॉर्ड snapshot" || bad "हटाए खाते का snapshot नहीं मिला"
     DELME=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/auth/me" -H "x-user-token: $DELTOK" -H 'x-device-id: ci-delete-device-001')
     [ "$DELME" = "401" ] && ok "हटाए खाते का session बंद" || bad "हटाए खाते का session बंद नहीं ($DELME)"
     DELLOGIN=$(curl -s -o /tmp/janmat-del-login.json -w '%{http_code}' -X POST "$BASE/api/auth/login" -H 'content-type: application/json' -d '{"username":"ci_delete","password":"731946","deviceId":"ci-delete-device-001"}')

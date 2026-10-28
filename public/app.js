@@ -4108,6 +4108,7 @@ function settingsVotesHTML(data) {
 
 let devData = null;
 let devTab = 'active';
+let devUserFilter = 'main';
 
 /* सार्वजनिक UI में इस प्रवेश का कोई बटन/लिंक नहीं रखा गया है। */
 const OWNER_GATE_KEY = 'jm_owner_gate_v1';
@@ -4195,7 +4196,7 @@ async function renderDeveloper() {
         <button class="tab ${devTab === 'active' ? 'active' : ''}" data-devt="active">चालू चुनाव (${devData.elections.filter((e) => !e.closed).length})</button>
         <button class="tab ${devTab === 'elections' ? 'active' : ''}" data-devt="elections">सभी चुनाव (${devData.elections.length})</button>
         <button class="tab ${devTab === 'votes' ? 'active' : ''}" data-devt="votes">सभी वोट (${devData.votes.length})</button>
-        <button class="tab ${devTab === 'users' ? 'active' : ''}" data-devt="users">यूज़र्स (${devData.users.length})</button>
+        <button class="tab ${devTab === 'users' ? 'active' : ''}" data-devt="users">यूज़र्स / रिकॉर्ड (${devUserRecordGroups(devData.users).main.length})</button>
         <button class="tab ${devTab === 'complaints' ? 'active' : ''}" data-devt="complaints">शिकायतें (${(devData.usage && devData.usage.openComplaints) || 0})</button>
         <button class="tab ${devTab === 'applications' ? 'active' : ''}" data-devt="applications">खाता आवेदन (${(devData.usage && devData.usage.pendingApplications) || 0})</button>
         <button class="tab ${devTab === 'summary' ? 'active' : ''}" data-devt="summary">सारांश</button>
@@ -4517,7 +4518,7 @@ async function refreshDevData() {
     if (k === 'active') tab.textContent = 'चालू चुनाव (' + devData.elections.filter((e) => !e.closed).length + ')';
     else if (k === 'elections') tab.textContent = 'सभी चुनाव (' + devData.elections.length + ')';
     else if (k === 'votes') tab.textContent = 'सभी वोट (' + devData.votes.length + ')';
-    else if (k === 'users') tab.textContent = 'यूज़र्स (' + devData.users.length + ')';
+    else if (k === 'users') tab.textContent = 'यूज़र्स / रिकॉर्ड (' + devUserRecordGroups(devData.users).main.length + ')';
     else if (k === 'complaints') tab.textContent = 'शिकायतें (' + (((devData.usage || {}).openComplaints) || 0) + ')';
     else if (k === 'applications') tab.textContent = 'खाता आवेदन (' + (((devData.usage || {}).pendingApplications) || 0) + ')';
     else if (k === 'summary') tab.textContent = 'सारांश';
@@ -5007,8 +5008,11 @@ function devAccountStatusHTML(u) {
     const until = u.banType === 'temporary' && info.banUntil
       ? '<div class="muted small">' + esc(fullDate(info.banUntil)) + ' तक</div>'
       : '<div class="muted small">स्थायी रोक</div>';
+    const remaining = u.banType === 'temporary' && info.banUntil
+      ? '<div class="muted small">बाकी अवधि: ' + esc(fmtLeft(info.banUntil - Date.now())) + '</div>' : '';
+    const started = u.bannedAt ? '<div class="muted small">रोक लगी: ' + esc(fullDate(u.bannedAt)) + '</div>' : '';
     const reason = u.banReason ? '<div class="muted small" style="max-width:220px;white-space:normal">कारण: ' + esc(u.banReason) + '</div>' : '';
-    return '<span class="badge closed">रोक लगी है</span>' + until + reason;
+    return '<span class="badge closed">' + (u.banType === 'temporary' ? 'तय दिनों की रोक' : 'स्थायी रोक') + '</span>' + until + remaining + started + reason;
   }
   if (info.status === 'deleted') {
     const when = u.deletedAt ? '<div class="muted small">' + esc(fullDate(u.deletedAt)) + '</div>' : '';
@@ -5019,36 +5023,160 @@ function devAccountStatusHTML(u) {
   return '<span class="badge closed">' + esc(info.status) + '</span>';
 }
 
+function devUserRecordGroup(u) {
+  const info = devAccountStatusInfo(u);
+  if (info.status === 'deleted') return 'deleted';
+  if (info.status === 'banned') return u && u.banType === 'temporary' ? 'temporary' : 'permanent';
+  if (info.status === 'replaced') return 'replaced';
+  return 'active';
+}
+
+function devUserRecordGroups(users) {
+  const list = Array.isArray(users) ? users : ((devData && devData.users) || []);
+  const groups = { main: [], active: [], temporary: [], permanent: [], deleted: [], replaced: [] };
+  list.forEach((u) => {
+    const group = devUserRecordGroup(u);
+    if (groups[group]) groups[group].push(u);
+    else groups.active.push(u);
+    if (group !== 'deleted') groups.main.push(u);
+  });
+  groups.temporary.sort((a, b) => (Number(a.banUntil) || Number.MAX_SAFE_INTEGER) - (Number(b.banUntil) || Number.MAX_SAFE_INTEGER));
+  groups.permanent.sort((a, b) => (Number(b.bannedAt) || 0) - (Number(a.bannedAt) || 0));
+  groups.deleted.sort((a, b) => (Number(b.deletedAt) || 0) - (Number(a.deletedAt) || 0));
+  return groups;
+}
+
+function devDeletedSnapshot(u) {
+  return u && u.deletedSnapshot && typeof u.deletedSnapshot === 'object' ? u.deletedSnapshot : null;
+}
+function devUserDisplayName(u) {
+  const snap = devDeletedSnapshot(u);
+  return snap && snap.name ? snap.name : ((u && u.name) || '');
+}
+function devUserRecordDeviceCount(u) {
+  const snap = devDeletedSnapshot(u);
+  if (snap && Number.isFinite(Number(snap.deviceCount))) return Number(snap.deviceCount) || 0;
+  return (u && Number(u.deviceCount)) || 0;
+}
+function devUserRecordLastLogin(u) {
+  const snap = devDeletedSnapshot(u);
+  return (snap && snap.lastLoginAt) || (u && u.lastLoginAt) || null;
+}
+function devRecordGroupLabel(group) {
+  return ({
+    main: 'मुख्य सूची',
+    active: 'चालू खाता',
+    temporary: 'तय दिनों की रोक',
+    permanent: 'स्थायी रोक',
+    deleted: 'हटाया खाता',
+    replaced: 'पुराना बदला खाता',
+  })[group] || group || '—';
+}
+
+function devDeletedUsersTableHTML(list) {
+  if (!list.length) return '<p class="muted" style="padding:14px 2px">अभी कोई हटाया गया खाता इस रिकॉर्ड में नहीं है।</p>';
+  return `<div class="table-wrap tall">
+      <table class="dev-table" id="devUsersTable">
+        <thead><tr><th>हटाया खाता / Username</th><th>खाता बना</th><th>हटाया गया</th><th>किसके द्वारा / कारण</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस रिकॉर्ड</th><th>हटाने से पहले आख़िरी लॉगिन</th><th>Account ID</th></tr></thead>
+        <tbody>
+          ${list.map((u) => {
+            const snap = devDeletedSnapshot(u);
+            const lastLogin = devUserRecordLastLogin(u);
+            return `
+            <tr data-name="${esc((devUserDisplayName(u) + ' ' + (u.username || '') + ' ' + u.id + ' ' + ((u.electionCodes || []).join(' '))).toLowerCase())}">
+              <td>
+                <b>${esc(devUserDisplayName(u))}</b>${(snap && snap.isDemo) || u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}
+                <div style="margin-top:4px">${u.username ? '<span class="code-chip">@' + esc(u.username) + '</span>' : '<span class="muted small">username नहीं था</span>'}</div>
+                ${snap && snap.name && snap.name !== u.name ? '<div class="muted small" style="margin-top:4px">हटाने से पहले का नाम (सिर्फ़ डेवलपर रिकॉर्ड)</div>' : ''}
+              </td>
+              <td class="nowrap">${u.createdAt ? esc(fullDate(u.createdAt)) : '—'}<div class="muted small">${esc(timeAgo(u.createdAt))}</div></td>
+              <td class="nowrap">${u.deletedAt ? esc(fullDate(u.deletedAt)) : '—'}<div class="muted small">${esc(timeAgo(u.deletedAt))}</div></td>
+              <td>
+                <b>${u.deletedBy === 'developer' ? 'डेवलपर द्वारा' : (u.deletedBy === 'self' ? 'उपयोगकर्ता ने खुद' : 'पुराना रिकॉर्ड')}</b>
+                ${u.deleteReason ? '<div class="muted small" style="max-width:220px;white-space:normal">कारण: ' + esc(u.deleteReason) + '</div>' : ''}
+              </td>
+              <td>
+                ${u.electionsCreated ? `<button class="chip-btn" data-user-elections="${esc(u.id)}">${u.electionsCreated}</button>` : '0'}
+                ${u.electionCodes && u.electionCodes.length ? '<div class="muted small" style="max-width:190px;white-space:normal">' + esc(u.electionCodes.join(', ')) + '</div>' : ''}
+              </td>
+              <td>${u.votesCast}</td>
+              <td>${devUserRecordDeviceCount(u)}${snap ? '<div class="muted small">हटाने से पहले</div>' : ''}</td>
+              <td class="nowrap">${lastLogin ? esc(fullDate(lastLogin)) : '—'}<div class="muted small">${esc(timeAgo(lastLogin))}</div></td>
+              <td class="nowrap"><span class="code-chip">${esc(u.id)}</span><div style="margin-top:7px"><button class="btn btn-ghost btn-sm" data-user-record="${esc(u.id)}">पूरा रिकॉर्ड</button></div></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="dev-note">पुराने हटाए खातों में जो नाम/जानकारी उस समय पहले ही मिट चुकी थी, वह अब वापस नहीं आ सकती; उनमें बचा हुआ username और रिकॉर्ड दिखेगा। इस update के बाद Developer द्वारा हटाए खातों का नाम, username, तारीख, कारण और खाता-आँकड़े इसी अलग रिकॉर्ड में सुरक्षित रहेंगे। PIN या रिकवरी कोड कभी रिकॉर्ड नहीं होता।</p>`;
+}
+
 function devUsersHTML() {
+  const groups = devUserRecordGroups(devData.users);
+  const filters = [
+    { key: 'main', label: 'मुख्य सूची', title: 'मुख्य यूज़र्स सूची', note: 'हटाए गए खाते इस मुख्य सूची में नहीं दिखते।' },
+    { key: 'active', label: 'चालू खाते', title: 'चालू खाते', note: 'जिन खातों से अभी login हो सकता है।' },
+    { key: 'temporary', label: 'तय दिनों की रोक', title: 'Schedule करके रोके गए खाते', note: 'अवधि पूरी होते ही ये खाते अपने आप चालू हो जाते हैं।' },
+    { key: 'permanent', label: 'स्थायी रोक', title: 'स्थायी रूप से रोके गए खाते', note: 'डेवलपर द्वारा रोक हटाए जाने तक login बंद रहेगा।' },
+    { key: 'deleted', label: 'हटाए खाते', title: 'हटाए गए खातों का अलग रिकॉर्ड', note: 'Username और उपलब्ध पूरा खाता रिकॉर्ड सिर्फ़ इसी अलग जगह दिखता है।' },
+    { key: 'replaced', label: 'पुराने बदले खाते', title: 'पुराने बदले हुए खाते', note: 'इनका login पहले ही बंद है; डेटा नए खाते से जुड़ा होता है।' },
+  ];
+  if (!filters.some((f) => f.key === devUserFilter)) devUserFilter = 'main';
+  const selected = filters.find((f) => f.key === devUserFilter) || filters[0];
+  const list = groups[selected.key] || groups.main;
+  const developerDeleted = groups.deleted.filter((u) => u.deletedBy === 'developer').length;
+  const selfDeleted = groups.deleted.filter((u) => u.deletedBy === 'self').length;
+  const legacyDeleted = Math.max(0, groups.deleted.length - developerDeleted - selfDeleted);
+
   return `
   <div class="dev-card">
     <div class="dev-card-head">
-      <h3>सभी यूज़र्स (${devData.users.length})</h3>
+      <h3>यूज़र्स रिकॉर्ड (कुल ${fmt(devData.users.length)})</h3>
       <div class="dev-tools">
-        <input type="search" id="devUserSearch" placeholder="नाम खोजें…" />
-        <button class="btn btn-ghost btn-sm" id="exportUsers">${ICON.download} CSV</button>
+        <input type="search" id="devUserSearch" placeholder="नाम / @username / ID / चुनाव कोड खोजें…" />
+        <button class="btn btn-ghost btn-sm" id="exportUsers">${ICON.download} सभी रिकॉर्ड CSV</button>
       </div>
     </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px;margin:12px 0" aria-label="खाता रिकॉर्ड श्रेणियाँ">
+      ${filters.map((f) => `
+        <button type="button" class="chip-btn" data-user-filter="${f.key}" aria-pressed="${devUserFilter === f.key ? 'true' : 'false'}"
+          style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border-radius:14px;text-align:left;${devUserFilter === f.key ? 'border-color:#ffb347;background:rgba(255,149,0,.16);box-shadow:0 0 0 1px #ffb347 inset' : ''}">
+          <b style="font-size:1.15rem;line-height:1">${fmt(groups[f.key].length)}</b>
+          <span>${f.label}</span>
+        </button>`).join('')}
+    </div>
+
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;margin:10px 0 12px">
+      <div>
+        <b>${selected.title} (${fmt(list.length)})</b>
+        <div class="muted small" style="margin-top:3px">${selected.note}</div>
+      </div>
+      ${selected.key === 'deleted' ? `<div class="muted small" style="text-align:right">कुल हटाए: <b>${fmt(groups.deleted.length)}</b><br>डेवलपर द्वारा: <b>${fmt(developerDeleted)}</b> · उपयोगकर्ता ने खुद: <b>${fmt(selfDeleted)}</b>${legacyDeleted ? ' · पुराने/अज्ञात: <b>' + fmt(legacyDeleted) + '</b>' : ''}</div>` : ''}
+      ${selected.key === 'temporary' || selected.key === 'permanent' ? `<div class="muted small" style="text-align:right">कुल रोके खाते: <b>${fmt(groups.temporary.length + groups.permanent.length)}</b><br>तय दिनों की रोक: <b>${fmt(groups.temporary.length)}</b> · स्थायी रोक: <b>${fmt(groups.permanent.length)}</b></div>` : ''}
+    </div>
+
+    ${selected.key === 'deleted' ? devDeletedUsersTableHTML(list) : `
     <div class="table-wrap">
       <table class="dev-table" id="devUsersTable">
         <thead><tr><th>नाम / Username</th><th>जुड़े</th><th>बनाए चुनाव</th><th>दिए वोट</th><th>डिवाइस</th><th>आख़िरी लॉगिन</th><th>स्थिति / खाता नियंत्रण</th></tr></thead>
         <tbody>
-          ${devData.users.map((u) => `
-            <tr data-name="${esc((u.name + ' ' + (u.username || '')).toLowerCase())}">
+          ${list.length ? list.map((u) => `
+            <tr data-name="${esc((u.name + ' ' + (u.username || '') + ' ' + u.id + ' ' + ((u.electionCodes || []).join(' '))).toLowerCase())}">
               <td><b>${esc(u.name)}</b>${u.isDemo ? ' <span class="mini-badge">डेमो</span>' : ''}<div class="muted small">${u.username ? '@' + esc(u.username) : 'username नहीं'}</div></td>
-              <td class="nowrap">${esc(timeAgo(u.createdAt))}</td>
+              <td class="nowrap">${esc(timeAgo(u.createdAt))}${u.createdAt ? '<div class="muted small">' + esc(fullDate(u.createdAt)) + '</div>' : ''}</td>
               <td>${u.electionsCreated ? `<button class="chip-btn" data-user-elections="${esc(u.id)}">${u.electionsCreated}</button>` : '0'}</td>
               <td>${u.votesCast}</td>
               <td>${u.deviceCount}</td>
-              <td class="nowrap">${esc(timeAgo(u.lastLoginAt))}</td>
+              <td class="nowrap">${esc(timeAgo(u.lastLoginAt))}${u.lastLoginAt ? '<div class="muted small">' + esc(fullDate(u.lastLoginAt)) + '</div>' : ''}</td>
               <td class="nowrap">
                 ${devAccountStatusHTML(u)}
                 ${['active', 'banned'].includes(devAccountStatusInfo(u).status) ? `<div style="margin-top:7px"><button class="btn btn-ghost btn-sm" data-user-moderate="${esc(u.id)}">खाता नियंत्रण</button></div>` : ''}
               </td>
-            </tr>`).join('')}
+            </tr>`).join('') : '<tr><td colspan="7" class="muted">इस रिकॉर्ड में अभी कोई खाता नहीं है।</td></tr>'}
         </tbody>
       </table>
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -5219,6 +5347,14 @@ function bindDevBody() {
   };
   $$('[data-devt-jump]').forEach((b) => b.addEventListener('click', () => jump(b.dataset.devtJump)));
 
+  $$('[data-user-filter]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      devUserFilter = btn.dataset.userFilter || 'main';
+      const body = document.getElementById('devBody');
+      if (body) { body.innerHTML = devBodyHTML(); bindDevBody(); }
+    });
+  });
+
   const search = (inputId, tableId) => {
     const input = document.getElementById(inputId);
     const table = document.getElementById(tableId);
@@ -5237,17 +5373,35 @@ function bindDevBody() {
   const exportUsers = document.getElementById('exportUsers');
   if (exportUsers) {
     exportUsers.addEventListener('click', () => {
-      const rows = [['नाम', 'Username', 'स्थिति', 'रोक कब तक', 'रोक/हटाने का कारण', 'जुड़े', 'बनाए चुनाव', 'दिए वोट', 'डिवाइस', 'डेमो']];
+      const rows = [['रिकॉर्ड श्रेणी', 'Account ID', 'नाम (रिकॉर्ड)', 'Username', 'स्थिति', 'रोक प्रकार', 'रोक लगी', 'रोक कब तक', 'रोक/हटाने का कारण', 'हटाया गया', 'हटाने वाला', 'जुड़े', 'आख़िरी लॉगिन (रिकॉर्ड)', 'बनाए चुनाव', 'चुनाव कोड', 'दिए वोट', 'डिवाइस (रिकॉर्ड)', 'PIN स्थिति', 'डेमो']];
       devData.users.forEach((u) => {
         const info = devAccountStatusInfo(u);
+        const group = devUserRecordGroup(u);
+        const snap = devDeletedSnapshot(u);
+        const recordLogin = devUserRecordLastLogin(u);
         rows.push([
-          u.name, u.username || '', info.status,
+          devRecordGroupLabel(group),
+          u.id,
+          devUserDisplayName(u),
+          u.username || '',
+          info.status,
+          info.status === 'banned' ? (u.banType === 'temporary' ? 'तय दिनों की रोक' : 'स्थायी रोक') : '',
+          u.bannedAt ? fullDate(u.bannedAt) : '',
           info.status === 'banned' ? (u.banType === 'temporary' && info.banUntil ? fullDate(info.banUntil) : 'स्थायी') : '',
           u.banReason || u.deleteReason || '',
-          fullDate(u.createdAt), u.electionsCreated, u.votesCast, u.deviceCount, u.isDemo ? 'हाँ' : 'नहीं',
+          u.deletedAt ? fullDate(u.deletedAt) : '',
+          u.deletedBy === 'developer' ? 'डेवलपर' : (u.deletedBy === 'self' ? 'उपयोगकर्ता ने खुद' : ''),
+          u.createdAt ? fullDate(u.createdAt) : '',
+          recordLogin ? fullDate(recordLogin) : '',
+          u.electionsCreated,
+          (u.electionCodes || []).join(' '),
+          u.votesCast,
+          devUserRecordDeviceCount(u),
+          (snap ? snap.hasPassword : u.hasPassword) ? 'PIN लगा था/है' : 'PIN नहीं',
+          (snap ? snap.isDemo : u.isDemo) ? 'हाँ' : 'नहीं',
         ]);
       });
-      downloadFile('janmat-users.csv', '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
+      downloadFile('janmat-user-records.csv', '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\n'), 'text/csv;charset=utf-8');
     });
   }
   const exportElections = document.getElementById('exportElections');
@@ -5288,7 +5442,7 @@ function bindDevBody() {
       const u = devData.users.find((x) => x.id === btn.dataset.userElections);
       if (!u) return;
       const list = devData.elections.filter((e) => e.creatorId === u.id);
-      openDevModal(`<h3>${esc(u.name)} के चुनाव</h3>` + (list.length ? `
+      openDevModal(`<h3>${esc(devUserDisplayName(u))} के चुनाव</h3>` + (list.length ? `
         <table class="dev-table"><thead><tr><th>कोड</th><th>चुनाव</th><th>वोट</th><th>स्थिति</th></tr></thead><tbody>
         ${list.map((e) => `<tr><td><span class="code-chip">${e.code}</span></td><td>${esc(e.title)}</td><td>${fmt(e.totalVotes)}</td><td>${e.closed ? 'समाप्त' : 'चालू'}</td></tr>`).join('')}
         </tbody></table>` : '<p class="muted">कोई चुनाव नहीं</p>'));
@@ -5297,6 +5451,10 @@ function bindDevBody() {
 
   $$('[data-user-moderate]').forEach((btn) => {
     btn.addEventListener('click', () => openDevUserModeration(btn.dataset.userModerate));
+  });
+
+  $$('[data-user-record]').forEach((btn) => {
+    btn.addEventListener('click', () => openDevUserRecord(btn.dataset.userRecord));
   });
 
   $$('[data-e-detail]').forEach((btn) => {
@@ -5349,6 +5507,44 @@ function bindDevBody() {
   });
 }
 
+function openDevUserRecord(userId) {
+  const u = devData && Array.isArray(devData.users) ? devData.users.find((x) => x.id === userId) : null;
+  if (!u) { toast('यह खाता रिकॉर्ड सूची में नहीं मिला — ताज़ा करें।', 'err'); return; }
+  const snap = devDeletedSnapshot(u);
+  const created = (devData.elections || []).filter((e) => e.creatorId === u.id);
+  const votes = (devData.votes || []).filter((v) => v.userId === u.id);
+  const lastLogin = devUserRecordLastLogin(u);
+  const line = (label, value) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid rgba(127,140,170,.18)"><span class="muted">${label}</span><b style="text-align:right">${value || '—'}</b></div>`;
+  openDevModal(`<h3>हटाया खाता — पूरा रिकॉर्ड</h3>
+    <p style="margin-top:2px"><b>${esc(devUserDisplayName(u))}</b>${u.username ? ' <span class="code-chip">@' + esc(u.username) + '</span>' : ' <span class="muted">(username नहीं था)</span>'}</p>
+    <div style="margin-top:10px">
+      ${line('Account ID', '<span class="code-chip">' + esc(u.id) + '</span>')}
+      ${line('खाता बना', u.createdAt ? esc(fullDate(u.createdAt)) : '')}
+      ${line('हटाया गया', u.deletedAt ? esc(fullDate(u.deletedAt)) : '')}
+      ${line('हटाने वाला', u.deletedBy === 'developer' ? 'डेवलपर' : (u.deletedBy === 'self' ? 'उपयोगकर्ता ने खुद' : 'पुराना रिकॉर्ड'))}
+      ${line('हटाने का कारण', u.deleteReason ? esc(u.deleteReason) : '')}
+      ${line('हटाने से पहले आख़िरी लॉगिन', lastLogin ? esc(fullDate(lastLogin)) : '')}
+      ${line('डिवाइस रिकॉर्ड', fmt(devUserRecordDeviceCount(u)))}
+      ${line('PIN स्थिति', (snap ? snap.hasPassword : u.hasPassword) ? 'PIN लगा था (असली PIN रिकॉर्ड नहीं होता)' : 'PIN नहीं था')}
+      ${line('बनाए चुनाव', fmt(u.electionsCreated))}
+      ${line('दिए वोट', fmt(u.votesCast))}
+    </div>
+
+    <h4 style="margin-top:18px">बनाए गए चुनाव (${fmt(created.length)})</h4>
+    ${created.length ? `<table class="dev-table" style="margin-top:8px"><thead><tr><th>कोड</th><th>चुनाव</th><th>कुल वोट</th><th>स्थिति</th></tr></thead><tbody>
+      ${created.map((e) => `<tr><td><span class="code-chip">${esc(e.code)}</span></td><td>${esc(e.title)}<div class="muted small">${esc(e.gram || '')} · ${esc(e.district || '')} · ${esc(e.state || '')}</div></td><td>${fmt(e.totalVotes)}</td><td>${e.closed ? 'समाप्त' : 'चालू'}</td></tr>`).join('')}
+    </tbody></table>` : '<p class="muted" style="margin-top:6px">इस खाते ने कोई चुनाव नहीं बनाया।</p>'}
+
+    <h4 style="margin-top:18px">दिए गए वोट (${fmt(votes.length)})</h4>
+    ${votes.length ? `<table class="dev-table" style="margin-top:8px"><thead><tr><th>समय</th><th>चुनाव</th><th>उम्मीदवार</th></tr></thead><tbody>
+      ${votes.map((v) => `<tr><td class="nowrap">${esc(fullDate(v.at))}</td><td><span class="code-chip">${esc(v.electionCode)}</span><div class="muted small">${esc(v.electionTitle)}</div></td><td>${esc(v.candidateName)}${v.candidateParty ? '<div class="muted small">' + esc(v.candidateParty) + '</div>' : ''}</td></tr>`).join('')}
+    </tbody></table>` : '<p class="muted" style="margin-top:6px">Developer वोट सूची में इस खाते का वोट रिकॉर्ड उपलब्ध नहीं है।</p>'}
+
+    ${u.moderationHistory && u.moderationHistory.length ? `<h4 style="margin-top:18px">Moderation इतिहास</h4>
+      <div style="margin-top:6px">${u.moderationHistory.slice().reverse().map((h) => `<div class="muted small" style="padding:6px 0;border-bottom:1px solid rgba(127,140,170,.16)"><b>${esc(h.action || '—')}</b> · ${h.at ? esc(fullDate(h.at)) : ''}${h.reason ? ' · कारण: ' + esc(h.reason) : ''}${h.banUntil ? ' · रोक तक: ' + esc(fullDate(h.banUntil)) : ''}</div>`).join('')}</div>` : ''}
+  `);
+}
+
 function openDevUserModeration(userId) {
   const u = devData && Array.isArray(devData.users) ? devData.users.find((x) => x.id === userId) : null;
   if (!u) { toast('यह खाता सूची में नहीं मिला — ताज़ा करें।', 'err'); return; }
@@ -5378,7 +5574,7 @@ function openDevUserModeration(userId) {
     <div class="alert bad" style="margin-top:16px">
       <b>ध्यान दें:</b> रोक लगाते या खाता हटाते ही इस खाते के सभी login session तुरंत बंद हो जाएँगे।
       <b>खाता हटाना वापस नहीं होगा</b> — PIN/रिकवरी भी बंद हो जाएगी और वही username फिर किसी को नहीं मिलेगा।
-      पुराने चुनाव और वोटों की गिनती परिणामों की सच्चाई के लिए बिना नाम के सुरक्षित रहेगी।
+      पुराने चुनाव और वोटों की गिनती परिणामों की सच्चाई के लिए बिना नाम के सुरक्षित रहेगी। हटाए खाते के अलग Developer रिकॉर्ड में हटाने से पहले का नाम, username, तारीख, कारण और खाता-आँकड़े audit के लिए रहेंगे; PIN/रिकवरी credential नहीं रहेगा।
       Developer द्वारा हटाए खाते के उसी जुड़े फ़ोन से सीधा नया खाता भी नहीं बनेगा; वापसी के लिए developer-approved appeal लगेगा। अगर खाता बाद में फिर चालू करना पड़ सकता है, तो हटाने की बजाय <b>स्थायी रोक</b> चुनें।
     </div>`);
 
@@ -5427,6 +5623,10 @@ function openDevUserModeration(userId) {
         },
       });
       toast(res.message || 'कार्रवाई हो गई।', 'ok');
+      devUserFilter = action === 'delete' ? 'deleted'
+        : action === 'ban-temporary' ? 'temporary'
+        : action === 'ban-permanent' ? 'permanent'
+        : 'active';
       const closeBtn = document.getElementById('devModalClose');
       if (closeBtn) closeBtn.click();
       await refreshDevData();
@@ -5664,7 +5864,7 @@ function renderTerms() {
           <li>अपमानजनक, सांप्रदायिक, धमकी भरा या अवैध नाम/सामग्री जोड़ना।</li>
           <li>किसी सरकारी चुनाव का प्रतिरूप बताकर भ्रम फैलाना।</li>
         </ul>
-        <p>ऐसा करने पर खाता कुछ दिनों के लिए या स्थायी रूप से बंद किया जा सकता है, या खाता/चुनाव हटाया जा सकता है। रोक लगने पर लॉगिन संदेश में रोक की अवधि और दिया गया कारण दिखेगा; यदि आपको लगता है कि रोक गलत लगी है तो <a href="#/grievance">शिकायत पेज</a> से पुनर्विचार माँग सकते हैं।</p>
+        <p>ऐसा करने पर खाता कुछ दिनों के लिए या स्थायी रूप से बंद किया जा सकता है, या खाता/चुनाव हटाया जा सकता है। रोक लगने पर लॉगिन संदेश में रोक की अवधि और दिया गया कारण दिखेगा; यदि आपको लगता है कि रोक गलत लगी है तो <a href="#/grievance">शिकायत पेज</a> से पुनर्विचार माँग सकते हैं। दुरुपयोग रोकने के लिए डेवलपर द्वारा हटाए खाते का सीमित audit record (नाम, username, तारीख, कारण और खाता-आँकड़े) सिर्फ़ Developer Panel में रह सकता है; PIN या रिकवरी credential नहीं रखा जाता।</p>
 
         <h3>6. सामग्री की ज़िम्मेदारी</h3>
         <p>उम्मीदवारों के नाम, पार्टी, चिन्ह और जानकारी आयोजक द्वारा भरी जाती है — उसकी सत्यता और अनुमति की ज़िम्मेदारी आयोजक की है। मंच केवल तकनीकी सुविधा देता है।</p>

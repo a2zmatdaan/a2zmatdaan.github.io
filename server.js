@@ -618,7 +618,7 @@ function publicSummary(e) {
   };
 }
 
-const APP_VERSION = '8.2.7-account-moderation';
+const APP_VERSION = '8.2.8-user-records';
 
 function publicElection(e, viewer) {
   syncElection(e);
@@ -703,6 +703,19 @@ function syncUserBan(user) {
   }
   return false;
 }
+function deletedSnapshotInfo(user) {
+  const s = user && user.deletedSnapshot && typeof user.deletedSnapshot === 'object' ? user.deletedSnapshot : null;
+  if (!s) return null;
+  return {
+    name: String(s.name || '').slice(0, 80),
+    username: s.username ? String(s.username).slice(0, 40) : (user.username || null),
+    createdAt: Number(s.createdAt) || null,
+    lastLoginAt: Number(s.lastLoginAt) || null,
+    deviceCount: Math.max(0, Number(s.deviceCount) || 0),
+    hasPassword: !!s.hasPassword,
+    isDemo: !!s.isDemo,
+  };
+}
 function accountModerationInfo(user) {
   syncUserBan(user);
   const status = user && user.deletedAt ? 'deleted' : ((user && user.accountStatus) || 'active');
@@ -712,6 +725,7 @@ function accountModerationInfo(user) {
     deletedAt: user && user.deletedAt ? user.deletedAt : null,
     deletedBy: user && user.deletedBy ? user.deletedBy : null,
     deleteReason: user && user.deleteReason ? String(user.deleteReason).slice(0, 200) : '',
+    deletedSnapshot: deletedSnapshotInfo(user),
     banType: banned ? (user.banType || 'permanent') : null,
     bannedAt: banned ? (user.bannedAt || null) : null,
     banUntil: banned && user.banType === 'temporary' ? (Number(user.banUntil) || null) : null,
@@ -787,6 +801,23 @@ function noteUserModeration(user, action, reason = '', banUntil = null, by = 'de
    सच्चाई के लिए बिना नाम के बने रहते हैं। username दोबारा किसी को नहीं मिलता। */
 function softDeleteAccount(user, by = 'self', reason = '') {
   const now = Date.now();
+  const developerDelete = by === 'developer';
+  if (developerDelete) {
+    /* सिर्फ़ Developer Panel के अलग “हटाए खाते” रिकॉर्ड के लिए हटाने से पहले का
+       सीमित audit snapshot। credential इसमें कभी नहीं रखा जाता। उपयोगकर्ता के
+       खुद खाता हटाने पर privacy के लिए ऐसा snapshot नहीं बनता। */
+    user.deletedSnapshot = {
+      name: user.name || '',
+      username: user.username || null,
+      createdAt: user.createdAt || null,
+      lastLoginAt: user.lastLoginAt || null,
+      deviceCount: Object.keys(user.devices || {}).length,
+      hasPassword: !!user.pwHash,
+      isDemo: !!user.isDemo,
+    };
+  } else {
+    delete user.deletedSnapshot;
+  }
   user.deletedAt = now;
   user.deletedBy = by;
   user.deleteReason = String(reason || '').slice(0, 200);
@@ -797,7 +828,6 @@ function softDeleteAccount(user, by = 'self', reason = '') {
   user.pwHash = null;
   user.recoveryHash = null;
   user.tokens = {};
-  const developerDelete = by === 'developer';
   if (developerDelete) {
     /* Developer द्वारा हटाए गलत खाते के फ़ोन से सीधा नया खाता न बने — device इतिहास
       सुरक्षित रहता है, इसलिए वापसी सिर्फ़ developer-approved appeal से होगी। */
@@ -2246,6 +2276,7 @@ async function handleApi(req, res, pathname) {
           deletedAt: moderation.deletedAt,
           deletedBy: moderation.deletedBy,
           deleteReason: moderation.deleteReason,
+          deletedSnapshot: moderation.deletedSnapshot,
           banType: moderation.banType,
           bannedAt: moderation.bannedAt,
           banUntil: moderation.banUntil,
@@ -2326,9 +2357,23 @@ async function handleApi(req, res, pathname) {
     voteRows.sort((a, b) => b.at - a.at);
 
     const today = istDayKey();
+    const userRecords = {
+      total: users.length,
+      main: users.filter((u) => u.accountStatus !== 'deleted').length,
+      active: users.filter((u) => u.accountStatus === 'active').length,
+      temporaryBanned: users.filter((u) => u.accountStatus === 'banned' && u.banType === 'temporary').length,
+      permanentBanned: users.filter((u) => u.accountStatus === 'banned' && u.banType !== 'temporary').length,
+      banned: users.filter((u) => u.accountStatus === 'banned').length,
+      deleted: users.filter((u) => u.accountStatus === 'deleted').length,
+      developerDeleted: users.filter((u) => u.accountStatus === 'deleted' && u.deletedBy === 'developer').length,
+      selfDeleted: users.filter((u) => u.accountStatus === 'deleted' && u.deletedBy === 'self').length,
+      legacyDeleted: users.filter((u) => u.accountStatus === 'deleted' && u.deletedBy !== 'developer' && u.deletedBy !== 'self').length,
+      replaced: users.filter((u) => u.accountStatus === 'replaced').length,
+    };
     const stats = {
       users: db.users.filter((u) => !u.isDemo).length,
       demoUsers: db.users.filter((u) => u.isDemo).length,
+      userRecords,
       elections: db.elections.length,
       votes: voteRows.length,
       todayElections: db.elections.filter((e) => istDayKey(e.createdAt) === today).length,

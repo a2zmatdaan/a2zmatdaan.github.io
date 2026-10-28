@@ -258,6 +258,19 @@
     }
     return false;
   }
+  function deletedSnapshotInfo(user) {
+    var s = user && user.deletedSnapshot && typeof user.deletedSnapshot === 'object' ? user.deletedSnapshot : null;
+    if (!s) return null;
+    return {
+      name: String(s.name || '').slice(0, 80),
+      username: s.username ? String(s.username).slice(0, 40) : (user.username || null),
+      createdAt: Number(s.createdAt) || null,
+      lastLoginAt: Number(s.lastLoginAt) || null,
+      deviceCount: Math.max(0, Number(s.deviceCount) || 0),
+      hasPassword: !!s.hasPassword,
+      isDemo: !!s.isDemo
+    };
+  }
   function moderationInfo(user) {
     syncUserBan(user);
     var status = user && user.deletedAt ? 'deleted' : ((user && user.accountStatus) || 'active');
@@ -267,6 +280,7 @@
       deletedAt: user && user.deletedAt ? user.deletedAt : null,
       deletedBy: user && user.deletedBy ? user.deletedBy : null,
       deleteReason: user && user.deleteReason ? String(user.deleteReason).slice(0, 200) : '',
+      deletedSnapshot: deletedSnapshotInfo(user),
       banType: banned ? (user.banType || 'permanent') : null,
       bannedAt: banned ? (user.bannedAt || null) : null,
       banUntil: banned && user.banType === 'temporary' ? (Number(user.banUntil) || null) : null,
@@ -300,11 +314,21 @@
   }
   function softDeleteAccount(user, by, reason) {
     var now = Date.now();
+    var developerDelete = (by || 'developer') === 'developer';
+    if (developerDelete) {
+      user.deletedSnapshot = {
+        name: user.name || '', username: user.username || null,
+        createdAt: user.createdAt || null, lastLoginAt: user.lastLoginAt || null,
+        deviceCount: Object.keys(user.devices || {}).length,
+        hasPassword: !!user.pwHash, isDemo: !!user.isDemo
+      };
+    } else {
+      delete user.deletedSnapshot;
+    }
     user.deletedAt = now; user.deletedBy = by || 'developer'; user.deleteReason = String(reason || '').slice(0, 200);
     user.accountStatus = 'deleted'; clearBanFields(user);
     user.name = 'हटाया गया उपयोगकर्ता'; user.nameLower = 'deleted:' + user.id;
     user.pwHash = null; user.recoveryHash = null; user.tokens = {};
-    var developerDelete = (by || 'developer') === 'developer';
     if (developerDelete) {
       if (!db.deviceAccounts || typeof db.deviceAccounts !== 'object') db.deviceAccounts = {};
       Object.keys(user.devices || {}).forEach(function (dk) {
@@ -1020,7 +1044,7 @@
         var modInfo = moderationInfo(u);
         return {
           id: u.id, name: u.name, username: u.username || null, accountStatus: modInfo.accountStatus,
-          deletedAt: modInfo.deletedAt, deletedBy: modInfo.deletedBy, deleteReason: modInfo.deleteReason,
+          deletedAt: modInfo.deletedAt, deletedBy: modInfo.deletedBy, deleteReason: modInfo.deleteReason, deletedSnapshot: modInfo.deletedSnapshot,
           banType: modInfo.banType, bannedAt: modInfo.bannedAt, banUntil: modInfo.banUntil, banReason: modInfo.banReason, banBy: modInfo.banBy,
           moderationHistory: Array.isArray(u.moderationHistory) ? u.moderationHistory.slice(-5) : [],
           hasPassword: !!u.pwHash,
@@ -1070,10 +1094,24 @@
       voteRows.sort(function (a, b) { return b.at - a.at; });
 
       var today = istDay();
+      var userRecords = {
+        total: users.length,
+        main: users.filter(function (u) { return u.accountStatus !== 'deleted'; }).length,
+        active: users.filter(function (u) { return u.accountStatus === 'active'; }).length,
+        temporaryBanned: users.filter(function (u) { return u.accountStatus === 'banned' && u.banType === 'temporary'; }).length,
+        permanentBanned: users.filter(function (u) { return u.accountStatus === 'banned' && u.banType !== 'temporary'; }).length,
+        banned: users.filter(function (u) { return u.accountStatus === 'banned'; }).length,
+        deleted: users.filter(function (u) { return u.accountStatus === 'deleted'; }).length,
+        developerDeleted: users.filter(function (u) { return u.accountStatus === 'deleted' && u.deletedBy === 'developer'; }).length,
+        selfDeleted: users.filter(function (u) { return u.accountStatus === 'deleted' && u.deletedBy === 'self'; }).length,
+        legacyDeleted: users.filter(function (u) { return u.accountStatus === 'deleted' && u.deletedBy !== 'developer' && u.deletedBy !== 'self'; }).length,
+        replaced: users.filter(function (u) { return u.accountStatus === 'replaced'; }).length
+      };
       return {
         stats: {
           users: db.users.filter(function (u) { return !u.isDemo; }).length,
           demoUsers: db.users.filter(function (u) { return u.isDemo; }).length,
+          userRecords: userRecords,
           elections: db.elections.length, votes: voteRows.length,
           todayElections: db.elections.filter(function (e) { return istDay(e.createdAt) === today; }).length,
           todayVotes: voteRows.filter(function (v) { return istDay(v.at) === today; }).length,
